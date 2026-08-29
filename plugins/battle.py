@@ -20,7 +20,13 @@ from database.mongo import (
 )
 
 
-def _choose_enemy(telegram_id: int, mode: str, player_level: int, enemy_key: str | None = None) -> dict[str, Any] | None:
+def _choose_enemy(
+    telegram_id: int,
+    mode: str,
+    player_level: int,
+    enemy_key: str | None = None,
+    opponent_telegram_id: int | None = None,
+) -> dict[str, Any] | None:
     if enemy_key:
         return get_villain(enemy_key)
     if mode in {"tutorial", "story"}:
@@ -30,9 +36,13 @@ def _choose_enemy(telegram_id: int, mode: str, player_level: int, enemy_key: str
         enemies = list_villains("villain", player_level)
         return random.choice(enemies) if enemies else None
     if mode == "arena":
-        opponent = collection("users").find_one(
-            {"telegram_id": {"$ne": telegram_id}, "origin": {"$ne": ""}},
-            sort=[("rating", 1)],
+        opponent = (
+            collection("users").find_one({"telegram_id": opponent_telegram_id, "origin": {"$ne": ""}})
+            if opponent_telegram_id
+            else collection("users").find_one(
+                {"telegram_id": {"$ne": telegram_id}, "origin": {"$ne": ""}},
+                sort=[("rating", 1)],
+            )
         )
         if not opponent:
             return None
@@ -65,10 +75,16 @@ def _choose_enemy(telegram_id: int, mode: str, player_level: int, enemy_key: str
     return None
 
 
-def _scale_enemy(enemy: dict[str, Any], player_level: int) -> dict[str, Any]:
+def _scale_enemy(enemy: dict[str, Any], player_level: int, randomize_level: bool = False) -> dict[str, Any]:
     scaled = deepcopy(enemy)
     base_level = max(1, int(enemy.get("min_level", 1)))
-    effective_level = max(base_level, player_level)
+    max_level = max(base_level, int(enemy.get("max_level", max(base_level, player_level + 2))))
+    if randomize_level:
+        low = max(base_level, player_level - 2)
+        high = min(max_level, player_level + 2)
+        effective_level = random.randint(low, max(low, high))
+    else:
+        effective_level = max(base_level, min(max_level, player_level))
     multiplier = 1.0 + max(0, effective_level - base_level) * 0.08
     scaled["level"] = effective_level
     scaled["hp"] = max(20, round(int(enemy.get("hp", 100)) * multiplier))
@@ -110,6 +126,7 @@ def start_battle(
     stage: str,
     enemy_key: str | None = None,
     event_reward: int = 0,
+    opponent_telegram_id: int | None = None,
 ) -> dict[str, Any]:
     team = get_team(telegram_id)
     if not team:
@@ -120,12 +137,12 @@ def start_battle(
         return {"ok": False, "reason": "Your active hero is no longer published."}
     profile = get_profile(telegram_id) or {}
     player_level = max(1, int(profile.get("level", 1)))
-    enemy = _choose_enemy(telegram_id, mode, player_level, enemy_key)
+    enemy = _choose_enemy(telegram_id, mode, player_level, enemy_key, opponent_telegram_id)
     if not enemy:
         content = "normal enemy" if mode in {"tutorial", "story"} else "villain" if mode == "rift" else "Arena opponent"
         return {"ok": False, "reason": f"No published {content} is available yet."}
 
-    enemy = _scale_enemy(enemy, player_level)
+    enemy = _scale_enemy(enemy, player_level, randomize_level=mode == "story")
     actor_level = max(1, int(actor_owned.get("level", 1)))
     available_moves = _character_moves(actor, actor_level)
     nemesis_available = actor["hero_key"] in enemy.get("nemesis_for", [])

@@ -12,6 +12,7 @@ from database.mongo import (
     evolve_character,
     get_hero,
     get_content_wizard,
+    get_battle,
     get_or_create_user,
     get_owned_hero,
     get_or_create_user_with_status,
@@ -29,6 +30,7 @@ from database.mongo import (
     save_team,
     set_active_team,
     update_player,
+    update_battle,
 )
 from guide import ensure_guide_pdf
 from plugins.arena import start_arena
@@ -85,8 +87,9 @@ GUIDE_TOPICS = {
         "/team → manage and name three battle lineups\n"
         "/char NAME → global codex story, photo, moves, and research/evolution\n"
         "/mychar NAME → your owned character, XP, stars, and actions\n"
-        "/pve → normal enemies and villain hunts\n"
+        "/pve or /hunt → find a random level-matched normal villain\n"
         "/pvp → asynchronous player Arena\n"
+        "/challenge → reply to another player to battle their active team\n"
         "/daily and /weekly → timed signal rewards\n"
         "/guide → open this guide center\n"
         "/help → open the main menu",
@@ -681,16 +684,60 @@ async def team_command(client, message):
 
 async def pve_command(client, message):
     _player(message)
+    battle_info = start_battle(message.from_user.id, "story", "Wild Villain Encounter")
+    if not battle_info["ok"]:
+        await message.reply_text(
+            f"<b>No hunt available</b>\n\n{battle_info['reason']}",
+            parse_mode="html",
+            reply_markup=back_markup("menu:battle", "← PvE"),
+        )
+        return
     await message.reply_text(
-        "<b>PvE operations</b>\n\nChoose a repeatable street enemy or a stronger published villain.",
+        f"<b>A wild villain appeared!</b>\n\n"
+        f"{escape(battle_info['enemy_name'])} · Level {battle_info['enemy_level']}\n"
+        f"HP → {battle_info['enemy_hp']}\n\nWhat will you do?",
         parse_mode="html",
-        reply_markup=InlineKeyboardMarkup([
-            [
-                InlineKeyboardButton("Normal enemy", callback_data="pve:normal"),
-                InlineKeyboardButton("Villain hunt", callback_data="pve:villain"),
-            ],
-            [InlineKeyboardButton("← Main menu", callback_data="menu:home")],
-        ]),
+        reply_markup=InlineKeyboardMarkup([[
+            InlineKeyboardButton("Battle", callback_data=f"encounter:battle:{battle_info['id']}"),
+            InlineKeyboardButton("Run", callback_data=f"encounter:run:{battle_info['id']}"),
+        ]]),
+    )
+
+
+async def challenge_command(client, message):
+    _player(message)
+    if not message.reply_to_message or not message.reply_to_message.from_user:
+        await message.reply_text(
+            "<b>Direct challenge</b>\n\nReply to another player’s message with /challenge.",
+            parse_mode="html",
+            reply_markup=back_markup("pvp:menu", "← PvP"),
+        )
+        return
+    opponent = message.reply_to_message.from_user
+    if opponent.id == message.from_user.id or opponent.is_bot:
+        await message.reply_text("<b>Invalid opponent</b>\n\nChallenge another human player.", parse_mode="html")
+        return
+    battle_info = start_arena(message.from_user.id, opponent.id)
+    if not battle_info["ok"]:
+        await message.reply_text(
+            f"<b>Challenge unavailable</b>\n\n{battle_info['reason']}",
+            parse_mode="html",
+            reply_markup=back_markup("pvp:menu", "← PvP"),
+        )
+        return
+    battle = {
+        "stage": "Direct Challenge", "enemy_hp": battle_info["enemy_hp"],
+        "enemy_max_hp": battle_info["enemy_hp"], "player_hp": battle_info["player_hp"],
+        "player_max_hp": battle_info["player_hp"], "turn": 1,
+        "actor_name": battle_info["actor_name"], "actor_level": battle_info["actor_level"],
+        "enemy_level": battle_info["enemy_level"],
+    }
+    await message.reply_text(
+        _battle_text(battle, battle_info["enemy_name"]),
+        parse_mode="html",
+        reply_markup=_battle_markup(
+            battle_info["id"], mode="arena", move_names=battle_info["move_names"], moves=battle_info["moves"]
+        ),
     )
 
 
@@ -887,6 +934,30 @@ async def callback_handler(client, callback_query):
         await log_event(client, "Character evolution", f"{hero.get('name', hero_key)} evolved", user_id)
         return
 
+    if data.startswith("encounter:"):
+        _, action, battle_id = data.split(":", 2)
+        battle = get_battle(user_id, battle_id)
+        if not battle or battle.get("status") != "active":
+            await _edit_callback(callback_query.message, "<b>Encounter expired</b>", back_markup("menu:battle", "← PvE"))
+            return
+        if action == "run":
+            update_battle(battle_id, status="fled")
+            await _edit_callback(
+                callback_query.message,
+                f"<b>You got away safely</b>\n\n{escape(str(battle.get('enemy_name', 'The villain')))} disappeared.",
+                back_markup("menu:battle", "← PvE"),
+            )
+            return
+        await _edit_callback(
+            callback_query.message,
+            _battle_text(battle, str(battle.get("enemy_name", "Wild Villain"))),
+            _battle_markup(
+                battle_id, mode="story", move_names=battle.get("move_names", {}),
+                nemesis_available=bool(battle.get("nemesis_available")), moves=battle.get("moves", []),
+            ),
+        )
+        return
+
     if data.startswith("origin:"):
         key = data.split(":", 1)[1]
         origin = ORIGINS.get(key)
@@ -1022,7 +1093,8 @@ async def callback_handler(client, callback_query):
         await _edit_callback(
             callback_query.message,
             "<b>PvP Arena</b>\n\nFight another registered player’s defensive signal team. "
-            "This is asynchronous PvP: the opponent does not need to be online.",
+            "This is asynchronous PvP: the opponent does not need to be online.\n\n"
+            "For a direct battle, reply to a player’s message with /challenge.",
             InlineKeyboardMarkup([
                 [InlineKeyboardButton("Find opponent →", callback_data="menu:arena")],
                 [InlineKeyboardButton("← Main menu", callback_data="menu:home")],
@@ -1197,6 +1269,18 @@ async def callback_handler(client, callback_query):
                 reply_markup=back_markup("menu:battle", "← PvE"),
             )
             return
+        if mode == "story":
+            await callback_query.message.edit_text(
+                f"<b>A wild villain appeared!</b>\n\n"
+                f"{escape(battle_info['enemy_name'])} · Level {battle_info['enemy_level']}\n"
+                f"HP → {battle_info['enemy_hp']}\n\nWhat will you do?",
+                parse_mode="html",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("Battle", callback_data=f"encounter:battle:{battle_info['id']}"),
+                    InlineKeyboardButton("Run", callback_data=f"encounter:run:{battle_info['id']}"),
+                ]]),
+            )
+            return
         battle = {
             "stage": stage,
             "enemy_hp": battle_info["enemy_hp"],
@@ -1238,7 +1322,7 @@ async def callback_handler(client, callback_query):
         floor = int(profile.get("rift_floor", 1))
         battle_info = start_rift(user_id, floor)
         if not battle_info["ok"]:
-            await callback_query.message.edit_text(f"<b>The Rift is unavailable</b>\n\n{battle_info['reason']}", parse_mode="html", reply_markup=back_markup())
+            await callback_query.message.edit_text(f"<b>The Rift is unavailable</b>\n\n{battle_info['reason']}", parse_mode="html", reply_markup=back_markup("menu:rift", "← Rift"))
             return
         battle = {"stage": f"The Rift · Floor {floor}", "enemy_hp": battle_info["enemy_hp"], "enemy_max_hp": battle_info["enemy_hp"], "player_hp": battle_info["player_hp"], "player_max_hp": battle_info["player_hp"], "turn": 1, "actor_level": battle_info["actor_level"], "enemy_level": battle_info["enemy_level"]}
         battle["actor_name"] = battle_info["actor_name"]
@@ -1250,7 +1334,7 @@ async def callback_handler(client, callback_query):
             await callback_query.message.edit_text(
                 "<b>Events</b>\n\nNo event with a published boss is active yet.",
                 parse_mode="html",
-                reply_markup=back_markup(),
+                reply_markup=back_markup("menu:events", "← Events"),
             )
             return
         rows = [[InlineKeyboardButton(f"{event['title'][:28]} →", callback_data=f"event:start:{event['event_key']}")] for event in events[:10]]
@@ -1295,7 +1379,7 @@ async def callback_handler(client, callback_query):
         _, battle_id, action = data.split(":", 2)
         battle = resolve_action(user_id, battle_id, action)
         if not battle:
-            await callback_query.message.edit_text("<b>Battle expired</b>\n\nReturn to the menu and start a new encounter →", parse_mode="html", reply_markup=back_markup())
+            await callback_query.message.edit_text("<b>Battle expired</b>\n\nStart a new encounter →", parse_mode="html", reply_markup=back_markup("menu:battle", "← Battles"))
             return
         finished = battle["status"] != "active"
         result_line = "\n\n<b>Victory → reward granted</b>" if battle["status"] == "won" else "\n\n<b>Defeat → regroup and try again</b>" if battle["status"] == "lost" else ""
@@ -1325,8 +1409,9 @@ def register(client) -> None:
     client.add_handler(MessageHandler(mychar_command, filters.command("mychar")))
     client.add_handler(MessageHandler(inventory_command, filters.command("inventory")))
     client.add_handler(MessageHandler(team_command, filters.command(["team", "teams"])))
-    client.add_handler(MessageHandler(pve_command, filters.command("pve")))
+    client.add_handler(MessageHandler(pve_command, filters.command(["pve", "hunt"])))
     client.add_handler(MessageHandler(pvp_command, filters.command(["pvp", "arena"])))
+    client.add_handler(MessageHandler(challenge_command, filters.command("challenge")))
     client.add_handler(MessageHandler(daily_command, filters.command("daily")))
     client.add_handler(MessageHandler(weekly_command, filters.command("weekly")))
     client.add_handler(CallbackQueryHandler(callback_handler))

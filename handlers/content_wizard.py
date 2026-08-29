@@ -33,7 +33,10 @@ OPTIONS = {
     "enemy_role": ["Brute", "Assassin", "Controller", "Support", "Boss"],
     "universe": ["MCU", "DCU", "Bhoomi-1", "CapeVerse", "Other / new"],
     "origin_type": ["Human", "Enhanced Human", "Tech-Enhanced", "Mystic", "Alien", "Other / new"],
-    "faction": ["Independent", "CapeVerse Guardians", "Other / new"],
+    "faction": [
+        "Independent", "CapeVerse Vanguards", "CapeVerse Originals",
+        "Justice League", "Avengers", "X-Men", "Other / new",
+    ],
     "ai_assist": ["Generate with AI", "Enter moves manually"],
 }
 
@@ -519,7 +522,16 @@ async def wizard_callback(client, callback_query):
             wizard = save_content_wizard(
                 callback_query.from_user.id, wizard["kind"], index, payload, wizard.get("first_name", "")
             )
-            await _prompt(callback_query.message, wizard, edit=True)
+            if step["field"] == "faction":
+                await callback_query.message.edit_text(
+                    "<b>New faction</b>\n\nType the faction or organization name.",
+                    parse_mode="html",
+                    reply_markup=InlineKeyboardMarkup([[
+                        InlineKeyboardButton("← Faction choices", callback_data=f"wizard:edit:{step['field']}")
+                    ]]),
+                )
+            else:
+                await _prompt(callback_query.message, wizard, edit=True)
             return
         if step["field"] == "ai_assist" and value == "Generate with AI":
             await callback_query.message.edit_text(

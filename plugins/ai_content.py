@@ -55,7 +55,7 @@ def generate_character_blueprint(
     move_direction: str = "",
     character_data: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
-    base_url = os.getenv("OPENROUTER_BASE_URL", "").strip()
+    base_url = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1").strip()
     api_key = os.getenv("OPENROUTER_API_KEY", "").strip()
     if not base_url or not api_key or not description.strip():
         return None
@@ -89,8 +89,8 @@ def generate_character_blueprint(
         "Keep unlock levels meaningful: first move level 1, later moves level 4, 8, or 12."
     )
     body = json.dumps({
-        "model": "openrouter/free",
-        "max_completion_tokens": 4096,
+        "model": os.getenv("OPENROUTER_MODEL", "openrouter/free"),
+        "max_completion_tokens": 3000,
         "messages": [
             {"role": "system", "content": system},
             {"role": "user", "content": prompt},
@@ -103,7 +103,7 @@ def generate_character_blueprint(
         method="POST",
     )
     try:
-        with urllib.request.urlopen(request, timeout=20) as response:
+        with urllib.request.urlopen(request, timeout=10) as response:
             payload = json.loads(response.read().decode("utf-8"))
         text = payload["choices"][0]["message"]["content"]
         result = _extract_json(text)
