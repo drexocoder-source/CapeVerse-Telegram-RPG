@@ -29,15 +29,14 @@ OPTIONS = {
     "starter_origin": ["Enhanced", "Tech", "Mystic"],
     "enemy_type": ["normal", "villain", "event_boss"],
     "enemy_role": ["Brute", "Assassin", "Controller", "Support", "Boss"],
-    "universe": ["Earth-Prime", "Bhoomi-1", "Other / new"],
-    "place": ["Nova City", "Astra District", "Other / new"],
+    "universe": ["MCU", "DCU", "Bhoomi-1", "CapeVerse", "Other / new"],
 }
 
 HERO_STEPS = [
     {"field": "name", "title": "Hero name", "prompt": "What is the hero’s public name?"},
     {"field": "codename", "title": "Codename", "prompt": "What title or codename appears below the name?"},
     {"field": "universe", "title": "Universe", "options": OPTIONS["universe"]},
-    {"field": "place", "title": "Place", "options": OPTIONS["place"]},
+    {"field": "place", "title": "City or place", "prompt": "Type any city, district, planet, realm, or other place name."},
     {"field": "faction", "title": "Faction", "prompt": "Which faction or team does the hero belong to?"},
     {"field": "image_url", "title": "Image URL", "prompt": "Send the Telegraph image URL from @vTelegraphBot.\nIt must begin with https://telegra.ph/ or https://graph.org/"},
     {"field": "source", "title": "Source", "options": OPTIONS["source"]},
@@ -59,7 +58,7 @@ HERO_STEPS = [
 VILLAIN_STEPS = [
     {"field": "name", "title": "Enemy name", "prompt": "What is the enemy or villain’s name?"},
     {"field": "universe", "title": "Universe", "options": OPTIONS["universe"]},
-    {"field": "place", "title": "Place", "options": OPTIONS["place"]},
+    {"field": "place", "title": "City or place", "prompt": "Type any city, district, planet, realm, or other place name."},
     {"field": "faction", "title": "Faction", "prompt": "Which faction or force does this enemy serve?"},
     {"field": "image_url", "title": "Image URL", "prompt": "Send the Telegraph image URL from @vTelegraphBot.\nIt must begin with https://telegra.ph/ or https://graph.org/"},
     {"field": "source", "title": "Source", "options": OPTIONS["source"]},

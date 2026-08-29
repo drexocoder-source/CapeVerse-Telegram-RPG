@@ -50,7 +50,16 @@ GUIDE_TOPICS = {
         "Signal Shards → Recruitment Beacon pulls\n"
         "Prism Cores → premium-event currency reserved for future systems\n"
         "Patrol Intel → Case Files and mission choices\n"
-        "Signal Boost → increases until a high-rarity Beacon result is guaranteed",
+        "Signal Boost → increases until a high-rarity Beacon result is guaranteed\n\n"
+        "<b>How to earn</b>\n"
+        "New account → 500 Cape Credits, 2 Signal Shards, 5 Patrol Intel\n"
+        "Patrol → spend 1 Patrol Intel, earn +120 Cape Credits\n"
+        "Case File → spend 1 Patrol Intel, earn +90 Hero or +110 Vigilante/Antihero Credits\n"
+        "Normal battle → +75 Cape Credits on victory\n"
+        "Arena victory → +100 Cape Credits and +10 rating\n"
+        "Rift victory → +150 Cape Credits and advance one floor\n"
+        "Event boss → the reward configured for that event\n\n"
+        "Recruitment costs 1 Signal Shard. Relic forging costs 100 Cape Credits."
     ),
     "commands": (
         "Commands",
