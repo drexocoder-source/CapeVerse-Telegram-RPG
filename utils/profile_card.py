@@ -26,17 +26,28 @@ def generate_profile_card(profile: dict[str, Any], heroes: list[dict[str, Any]],
     level = int(profile.get("level", 1))
     xp = int(profile.get("xp", 0))
     next_xp = max(100, level * 100)
-    image = Image.new("RGB", (1200, 675), "#081221")
+    image = Image.new("RGB", (1200, 675), "#050b16")
     draw = ImageDraw.Draw(image)
 
-    draw.rectangle((0, 0, 1200, 14), fill="#66e3c4")
-    draw.polygon([(0, 0), (500, 0), (250, 675), (0, 675)], fill="#0d2033")
-    draw.ellipse((950, -180, 1350, 220), fill="#182a45")
-    draw.ellipse((1020, 420, 1340, 740), fill="#12213a")
-    draw.text((74, 68), "CAPEVERSE", fill="#63d2bf", font=_font(23, True))
-    draw.text((74, 122), name[:22], fill="#f4f7fb", font=_font(50, True))
-    draw.text((76, 190), "PLAYER PROFILE", fill="#9cacc2", font=_font(17, True))
-    draw.line((76, 244, 1125, 244), fill="#263a56", width=2)
+    accent = "#69f0d1"
+    draw.rectangle((0, 0, 1200, 16), fill=accent)
+    draw.polygon([(0, 16), (585, 16), (390, 675), (0, 675)], fill="#0b1a2c")
+    draw.polygon([(860, 0), (1200, 0), (1200, 675), (1010, 675)], fill="#101d32")
+    draw.rounded_rectangle((54, 50, 1145, 625), radius=30, outline="#233954", width=3)
+    draw.text((82, 70), "CAPEVERSE // SIGNAL DOSSIER", fill=accent, font=_font(20, True))
+    draw.text((82, 118), name[:22], fill="#f7fbff", font=_font(49, True))
+    draw.text((84, 183), f"ORIGIN {origin.upper()}  ·  ALIGNMENT {str(profile.get('alignment', 'Hero')).upper()}", fill="#91a7c4", font=_font(15, True))
+    draw.line((82, 228, 800, 228), fill="#2a4565", width=2)
+
+    featured = heroes[0] if heroes else {}
+    featured_name = str(featured.get("name", "NO ACTIVE SIGNAL"))
+    initials = "".join(word[:1] for word in featured_name.split()[:2]).upper() or "CV"
+    draw.ellipse((865, 82, 1095, 312), fill="#132b42", outline=accent, width=5)
+    initials_box = draw.textbbox((0, 0), initials, font=_font(64, True))
+    initials_w = initials_box[2] - initials_box[0]
+    draw.text((980 - initials_w / 2, 150), initials, fill="#f7fbff", font=_font(64, True))
+    draw.text((865, 332), "FEATURED SIGNAL", fill="#718baa", font=_font(13, True))
+    draw.text((865, 358), featured_name[:20], fill="#edf5ff", font=_font(21, True))
 
     items = [
         ("LEVEL", str(level)),
@@ -47,17 +58,21 @@ def generate_profile_card(profile: dict[str, Any], heroes: list[dict[str, Any]],
         ("RIFT", f"FLOOR {profile.get('rift_floor', 1)}"),
     ]
     for index, (label, value) in enumerate(items):
-        x = 76 + (index % 3) * 350
-        y = 292 + (index // 3) * 125
+        x = 82 + (index % 3) * 245
+        y = 265 + (index // 3) * 105
         draw.text((x, y), label, fill="#7d93ae", font=_font(15, True))
         draw.text((x, y + 30), value[:20], fill="#f4f7fb", font=_font(27, True))
 
-    bar_x, bar_y, bar_w = 76, 555, 690
+    bar_x, bar_y, bar_w = 82, 505, 690
     draw.rounded_rectangle((bar_x, bar_y, bar_x + bar_w, bar_y + 18), radius=9, fill="#20344a")
     fill_w = round(bar_w * min(1, xp / next_xp))
     draw.rounded_rectangle((bar_x, bar_y, bar_x + fill_w, bar_y + 18), radius=9, fill="#66e3c4")
-    draw.text((785, 548), f"XP {xp}/{next_xp}", fill="#9cacc2", font=_font(16, True))
-    draw.text((76, 603), f"SYNERGY +{synergy}%  ·  Collect. Build. Evolve.", fill="#63d2bf", font=_font(18))
+    draw.text((82, 535), f"XP {xp}/{next_xp}  ·  SYNERGY +{synergy}%", fill="#9cacc2", font=_font(16, True))
+    draw.text((865, 425), "WALLET", fill="#718baa", font=_font(13, True))
+    draw.text((865, 455), f"CR {profile.get('credits', 0)}", fill="#f1d77a", font=_font(20, True))
+    draw.text((865, 490), f"SHARDS {profile.get('signal_shards', 0)}", fill="#91d9ff", font=_font(17, True))
+    draw.text((865, 523), f"CORES {profile.get('prism_cores', 0)}", fill="#d6a8ff", font=_font(17, True))
+    draw.text((82, 585), "VERSION 0.8  ·  COLLECT  /  RESEARCH  /  ASCEND", fill=accent, font=_font(16, True))
     path = CARD_DIR / f"{profile.get('telegram_id', 'player')}.png"
     image.save(path, "PNG")
     return path

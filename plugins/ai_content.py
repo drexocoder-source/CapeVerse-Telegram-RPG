@@ -1,9 +1,4 @@
-"""AI-assisted, rights-aware character drafting.
-
-This module uses the Replit-managed OpenAI-compatible endpoint when available.
-The wizard always has a manual path, so content creation is not dependent on
-an external response.
-"""
+"""OpenRouter-assisted, rights-aware CapeVerse character drafting."""
 
 import json
 import os
@@ -54,7 +49,12 @@ def _normalise_moves(value: Any, category: str) -> list[dict[str, Any]]:
     return moves
 
 
-def generate_character_blueprint(description: str, kind: str = "hero") -> dict[str, Any] | None:
+def generate_character_blueprint(
+    description: str,
+    kind: str = "hero",
+    move_direction: str = "",
+    character_data: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
     base_url = os.getenv("OPENROUTER_BASE_URL", "").strip()
     api_key = os.getenv("OPENROUTER_API_KEY", "").strip()
     if not base_url or not api_key or not description.strip():
@@ -65,13 +65,24 @@ def generate_character_blueprint(description: str, kind: str = "hero") -> dict[s
         "Create original, rights-safe content: do not copy trademarked names, exact "
         "franchise abilities, logos, costumes, or existing characters. The user may "
         "choose a universe label separately, but your move names and descriptions "
-        "must remain original. Create three move categories: normal, defense, special. "
+        "must remain original. Make every character mechanically distinctive and make "
+        "the moves reflect the story, role, personality, weaknesses, location, and requested "
+        "combat style. Create three move categories: normal, defense, special. "
         "Each category must contain 1 to 3 moves. Every move needs name, description, "
-        "damage, unlock_level, cooldown, and effect. Defense moves may use damage 0."
+        "damage, unlock_level, cooldown, and effect. Defense moves may use damage 0. "
+        "For CapeVerse-original characters, suggest original evolution concepts. For licensed "
+        "characters, suggest research archive topics such as suit generations or documented "
+        "forms; never call licensed suit research an evolution and never invent rights."
     )
+    context = character_data or {}
     prompt = (
-        f"Analyze this {subject} description and make balanced game data:\n{description}\n\n"
-        "JSON keys: role, rarity, alignment, moves (normal/defense/special arrays). "
+        f"Analyze this {subject} and make interesting, balanced game data.\n\n"
+        f"Character data: {json.dumps(context, ensure_ascii=False)}\n"
+        f"Story description: {description}\n"
+        f"Requested move direction: {move_direction or 'Use the story and role to decide.'}\n\n"
+        "JSON keys: role, rarity, alignment, design_summary, moves "
+        "(normal/defense/special arrays), evolution_concepts, research_concepts. "
+        "Each evolution/research concept needs name, description, unlock_level, and requirement. "
         "For villains also include hp, attack, min_level, max_level. "
         "Keep unlock levels meaningful: first move level 1, later moves level 4, 8, or 12."
     )
@@ -104,6 +115,18 @@ def generate_character_blueprint(description: str, kind: str = "hero") -> dict[s
     }
     if not any(result["moves"].values()):
         return None
+    for key in ("evolution_concepts", "research_concepts"):
+        values = result.get(key, [])
+        result[key] = [
+            {
+                "name": str(item.get("name", ""))[:80],
+                "description": str(item.get("description", ""))[:500],
+                "unlock_level": max(1, min(50, int(item.get("unlock_level", 10)))),
+                "requirement": str(item.get("requirement", ""))[:200],
+            }
+            for item in values[:4]
+            if isinstance(item, dict) and item.get("name")
+        ]
     if kind != "hero":
         try:
             result["hp"] = max(20, min(10000, int(result.get("hp", 150))))

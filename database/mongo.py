@@ -1,9 +1,9 @@
 import os
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from pymongo import ASCENDING, DESCENDING, MongoClient
+from pymongo import ASCENDING, DESCENDING, MongoClient, ReturnDocument
 from pymongo.collection import Collection
 from pymongo.database import Database
 
@@ -49,6 +49,8 @@ def init_db() -> None:
     database.events.create_index([("event_key", ASCENDING)], unique=True)
     database.events.create_index([("status", ASCENDING)])
     database.content_wizards.create_index([("telegram_id", ASCENDING)], unique=True)
+    database.reward_claims.create_index([("telegram_id", ASCENDING), ("period", ASCENDING)], unique=True)
+    database.character_research.create_index([("telegram_id", ASCENDING), ("hero_key", ASCENDING)], unique=True)
     remove_default_seed_content()
 
 
@@ -122,6 +124,104 @@ def update_player(telegram_id: int, **fields: Any) -> dict[str, Any] | None:
         clean["last_seen_at"] = now()
         collection("users").update_one({"telegram_id": telegram_id}, {"$set": clean})
     return get_profile(telegram_id)
+
+
+def inventory_summary(telegram_id: int) -> dict[str, Any]:
+    profile = get_profile(telegram_id) or {}
+    return {
+        "credits": int(profile.get("credits", 0)),
+        "signal_shards": int(profile.get("signal_shards", 0)),
+        "prism_cores": int(profile.get("prism_cores", 0)),
+        "patrol_intel": int(profile.get("patrol_intel", 0)),
+        "heroes": collection("owned_heroes").count_documents({"telegram_id": telegram_id}),
+        "relics": collection("relic_instances").count_documents({"telegram_id": telegram_id}),
+        "research": collection("character_research").count_documents({"telegram_id": telegram_id}),
+    }
+
+
+def claim_timed_reward(telegram_id: int, period: str) -> dict[str, Any]:
+    if period not in {"daily", "weekly"}:
+        return {"ok": False, "reason": "Unknown reward period."}
+    profile = get_profile(telegram_id)
+    if not profile:
+        return {"ok": False, "reason": "Create your player profile first with /start."}
+    current = now()
+    interval = timedelta(days=1 if period == "daily" else 7)
+    claim_id = f"{telegram_id}:{period}"
+    claims = collection("reward_claims")
+    claims.update_one(
+        {"_id": claim_id},
+        {"$setOnInsert": {
+            "telegram_id": telegram_id,
+            "period": period,
+            "next_claim_at": datetime(1970, 1, 1, tzinfo=timezone.utc),
+            "streak": 0,
+            "last_claim_at": None,
+        }},
+        upsert=True,
+    )
+    previous = claims.find_one({"_id": claim_id}) or {}
+    locked = claims.find_one_and_update(
+        {"_id": claim_id, "next_claim_at": {"$lte": current}},
+        {"$set": {"last_claim_at": current, "next_claim_at": current + interval}},
+        return_document=ReturnDocument.AFTER,
+    )
+    if not locked:
+        waiting = claims.find_one({"_id": claim_id}) or {}
+        return {"ok": False, "reason": "Reward already claimed.", "next_claim_at": waiting.get("next_claim_at")}
+    last_claim = previous.get("last_claim_at")
+    if last_claim and last_claim.tzinfo is None:
+        last_claim = last_claim.replace(tzinfo=timezone.utc)
+    streak = int(previous.get("streak", 0)) + 1 if last_claim and current - last_claim <= interval * 2 else 1
+    rewards = (
+        {"credits": 50 + min(25, streak * 5), "patrol_intel": 1, "signal_shards": 0, "xp": 10}
+        if period == "daily"
+        else {"credits": 250 + min(100, streak * 20), "patrol_intel": 2, "signal_shards": 1, "xp": 50}
+    )
+    updated = update_player(
+        telegram_id,
+        credits=int(profile.get("credits", 0)) + rewards["credits"],
+        patrol_intel=int(profile.get("patrol_intel", 0)) + rewards["patrol_intel"],
+        signal_shards=int(profile.get("signal_shards", 0)) + rewards["signal_shards"],
+    ) or profile
+    updated = grant_user_xp(telegram_id, rewards["xp"]) or updated
+    claims.update_one({"_id": claim_id}, {"$set": {"streak": streak}})
+    record_ledger(telegram_id, "credits", rewards["credits"], f"{period.title()} reward", int(updated.get("credits", 0)))
+    return {
+        "ok": True,
+        "period": period,
+        "rewards": rewards,
+        "streak": streak,
+        "next_claim_at": locked.get("next_claim_at"),
+        "profile": updated,
+    }
+
+
+def research_character(telegram_id: int, hero_key: str) -> dict[str, Any]:
+    hero = get_hero(hero_key)
+    if not hero:
+        return {"ok": False, "reason": "Character not found."}
+    if not str(hero.get("source", "")).lower().startswith("licensed"):
+        return {"ok": False, "reason": "Research Archives are reserved for licensed suit and form catalogs."}
+    result = collection("character_research").update_one(
+        {"telegram_id": telegram_id, "hero_key": hero_key},
+        {
+            "$setOnInsert": {
+                "telegram_id": telegram_id,
+                "hero_key": hero_key,
+                "name": hero.get("name", hero_key),
+                "status": "researched",
+                "discovered_at": now(),
+            },
+            "$set": {"last_viewed_at": now()},
+        },
+        upsert=True,
+    )
+    return {"ok": True, "new": bool(result.upserted_id), "hero": hero}
+
+
+def is_character_researched(telegram_id: int, hero_key: str) -> bool:
+    return collection("character_research").find_one({"telegram_id": telegram_id, "hero_key": hero_key}) is not None
 
 
 def list_heroes(status: str = "published") -> list[dict[str, Any]]:
@@ -230,7 +330,8 @@ def evolve_character(telegram_id: int, hero_key: str) -> dict[str, Any]:
 def update_hero(hero_key: str, fields: dict[str, Any]) -> dict[str, Any] | None:
     allowed = {
         "name", "codename", "origin_type", "universe", "place", "faction",
-        "description", "image_url", "role", "rarity", "alignment", "move_sets",
+        "description", "move_direction", "image_url", "role", "rarity", "alignment", "move_sets",
+        "evolution_concepts", "research_concepts", "ai_design_summary",
         "ability_signature", "signature_damage", "ability_utility",
         "utility_damage", "ability_ultimate", "ultimate_damage",
     }

@@ -50,6 +50,7 @@ HERO_STEPS = [
     {"field": "rarity", "title": "Rarity", "options": OPTIONS["rarity"]},
     {"field": "alignment", "title": "Alignment", "options": OPTIONS["alignment"]},
     {"field": "description", "title": "Story", "prompt": "Write a detailed original description. The AI can analyze it to create balanced moves."},
+    {"field": "move_direction", "title": "Move direction", "prompt": "Describe how the moves should look and feel: fighting style, power limits, personality, visual effects, tactics, and anything the AI must avoid."},
     {"field": "ai_assist", "title": "Move creation", "options": OPTIONS["ai_assist"]},
     {"field": "normal_moves", "title": "Normal moves", "conditional": "manual_moves", "prompt": "Send 1–3 normal moves, one per line:\nName | Description | Damage | Unlock level | Cooldown | Effect\n\nExample:\nPulse Jab | Fast energy strike | 18 | 1 | 0 | none"},
     {"field": "defense_moves", "title": "Defense moves", "conditional": "manual_moves", "prompt": "Send 1–3 defense moves, one per line:\nName | Description | Damage | Unlock level | Cooldown | Effect\n\nDamage may be 0. Example effect → shield 35%."},
@@ -71,6 +72,7 @@ VILLAIN_STEPS = [
     {"field": "rarity", "title": "Rarity", "options": OPTIONS["rarity"]},
     {"field": "role", "title": "Battle role", "options": OPTIONS["enemy_role"]},
     {"field": "description", "title": "Story", "prompt": "Write a detailed original description. The AI can analyze it to build moves and difficulty."},
+    {"field": "move_direction", "title": "Move direction", "prompt": "Describe how this enemy should fight: attack patterns, defenses, visual effects, difficulty, personality, and anything the AI must avoid."},
     {"field": "ai_assist", "title": "Move creation", "options": OPTIONS["ai_assist"]},
     {"field": "hp", "title": "Health", "conditional": "manual_stats", "prompt": "Enter total HP from 20 to 5000.", "number": (20, 5000)},
     {"field": "attack", "title": "Attack", "conditional": "manual_stats", "prompt": "Enter base attack from 1 to 500.", "number": (1, 500)},
@@ -203,6 +205,19 @@ def _moves_text(payload: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def _progression_text(payload: dict[str, Any]) -> str:
+    licensed = str(payload.get("source", "")).startswith("Licensed")
+    key = "research_concepts" if licensed else "evolution_concepts"
+    title = "Research archive" if licensed else "Evolution concepts"
+    items = payload.get(key, [])
+    if not items:
+        return f"<b>{title}</b>\nNone proposed"
+    return f"<b>{title}</b>\n" + "\n".join(
+        f"· {item.get('name')} · Lv {item.get('unlock_level', 1)} · {item.get('requirement', 'No requirement')}"
+        for item in items
+    )
+
+
 async def _prompt(message, wizard: dict[str, Any], edit: bool = False) -> None:
     index, step = _current_step(wizard)
     if step is None:
@@ -237,7 +252,10 @@ def _preview_text(wizard: dict[str, Any]) -> str:
             f"{p.get('origin_type')} · {p.get('rarity')} · {p.get('role')} · {p.get('alignment')}\n"
             f"Universe → {p.get('universe')}\nPlace → {p.get('place')}\nFaction → {p.get('faction')}\n"
             f"Starter → {starter}\n\n"
+            f"Story → {p.get('description', '')[:220]}\n"
+            f"Move direction → {p.get('move_direction', '')[:160]}\n\n"
             f"{_moves_text(p)}\n\n"
+            f"{_progression_text(p)}\n\n"
             f"Source → {p.get('source')}\nRights → {p.get('rights_status')}\n"
             "Submit this draft for owner approval?"
         )
@@ -248,7 +266,10 @@ def _preview_text(wizard: dict[str, Any]) -> str:
         f"Universe → {p.get('universe')}\nPlace → {p.get('place')}\nFaction → {p.get('faction')}\n"
         f"HP → {p.get('hp')} · Attack → {p.get('attack')}\n"
         f"Appears → player levels {p.get('min_level', 1)}–{p.get('max_level', 100)}\n"
+        f"Story → {p.get('description', '')[:220]}\n"
+        f"Move direction → {p.get('move_direction', '')[:160]}\n"
         f"{_moves_text(p)}\n"
+        f"{_progression_text(p)}\n"
         f"Nemesis hero → {p.get('nemesis_hero_key')}\n\n"
         f"Source → {p.get('source')}\nRights → {p.get('rights_status')}\n"
         "Submit this draft for owner approval?"
@@ -259,6 +280,15 @@ async def _preview(message, wizard: dict[str, Any], edit: bool = False) -> None:
     text = _preview_text(wizard)
     markup = InlineKeyboardMarkup([
         [InlineKeyboardButton("Submit for approval →", callback_data="wizard:submit")],
+        [
+            InlineKeyboardButton("Edit story", callback_data="wizard:edit:description"),
+            InlineKeyboardButton("Edit move brief", callback_data="wizard:edit:move_direction"),
+        ],
+        [
+            InlineKeyboardButton("Edit moves", callback_data="wizard:edit:moves"),
+            InlineKeyboardButton("Regenerate AI", callback_data="wizard:regenerate"),
+        ],
+        [InlineKeyboardButton("Edit image", callback_data="wizard:edit:image_url")],
         [InlineKeyboardButton("Cancel", callback_data="wizard:cancel")],
     ])
     image_url = wizard.get("payload", {}).get("image_url")
@@ -389,6 +419,60 @@ async def wizard_callback(client, callback_query):
         await callback_query.message.edit_text("<b>Creation cancelled</b>\n\nNo draft was submitted.", parse_mode="html")
         await log_event(client, "Content wizard", f"{wizard.get('kind')} draft cancelled", callback_query.from_user.id)
         return
+    if data.startswith("wizard:edit:"):
+        payload = dict(wizard.get("payload", {}))
+        requested = data.split(":", 2)[2]
+        target = "normal_moves" if requested == "moves" else requested
+        if requested == "moves":
+            payload["ai_assist"] = "Enter moves manually"
+        index = next((i for i, item in enumerate(_steps(wizard["kind"])) if item["field"] == target), None)
+        if index is None:
+            return
+        wizard = save_content_wizard(
+            callback_query.from_user.id, wizard["kind"], index, payload, wizard.get("first_name", "")
+        )
+        await _prompt(callback_query.message, wizard)
+        return
+    if data == "wizard:regenerate":
+        payload = dict(wizard.get("payload", {}))
+        await callback_query.message.reply_text(
+            "<b>AI content studio</b>\n\nReanalyzing the complete character and move brief…",
+            parse_mode="html",
+        )
+        blueprint = await asyncio.to_thread(
+            generate_character_blueprint,
+            str(payload.get("description", "")),
+            wizard["kind"],
+            str(payload.get("move_direction", "")),
+            {key: payload.get(key) for key in (
+                "name", "codename", "origin_type", "universe", "place",
+                "faction", "role", "rarity", "alignment", "source", "enemy_type",
+            )},
+        )
+        if not blueprint:
+            await callback_query.message.reply_text(
+                "<b>AI unavailable</b>\n\nYour current draft remains unchanged.",
+                parse_mode="html",
+            )
+            return
+        payload["move_sets"] = blueprint.get("moves", {})
+        payload["evolution_concepts"] = blueprint.get("evolution_concepts", [])
+        payload["research_concepts"] = blueprint.get("research_concepts", [])
+        payload["ai_design_summary"] = blueprint.get("design_summary", "")
+        if wizard["kind"] == "villain":
+            for field in ("hp", "attack", "min_level", "max_level"):
+                if blueprint.get(field) is not None:
+                    payload[field] = blueprint[field]
+        _apply_move_compatibility(payload)
+        wizard = save_content_wizard(
+            callback_query.from_user.id,
+            wizard["kind"],
+            len(_steps(wizard["kind"])),
+            payload,
+            wizard.get("first_name", ""),
+        )
+        await _preview(callback_query.message, wizard)
+        return
     if data == "wizard:submit":
         payload = dict(wizard.get("payload", {}))
         kind = wizard["kind"]
@@ -443,6 +527,11 @@ async def wizard_callback(client, callback_query):
                 generate_character_blueprint,
                 str(payload.get("description", "")),
                 wizard["kind"],
+                str(payload.get("move_direction", "")),
+                {key: payload.get(key) for key in (
+                    "name", "codename", "origin_type", "universe", "place",
+                    "faction", "role", "rarity", "alignment", "source", "enemy_type",
+                )},
             )
             if not blueprint:
                 value = "Enter moves manually"
@@ -452,6 +541,9 @@ async def wizard_callback(client, callback_query):
                 )
             else:
                 payload["move_sets"] = blueprint.get("moves", {})
+                payload["evolution_concepts"] = blueprint.get("evolution_concepts", [])
+                payload["research_concepts"] = blueprint.get("research_concepts", [])
+                payload["ai_design_summary"] = blueprint.get("design_summary", "")
                 for field in ("role", "rarity", "alignment"):
                     if blueprint.get(field):
                         payload[f"ai_suggested_{field}"] = blueprint[field]

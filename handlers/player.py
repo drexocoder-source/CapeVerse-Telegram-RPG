@@ -7,6 +7,7 @@ from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 from database.mongo import (
     add_hero_to_player,
+    claim_timed_reward,
     evolve_character,
     get_hero,
     get_or_create_user,
@@ -15,9 +16,12 @@ from database.mongo import (
     get_profile,
     get_starter_hero,
     get_team,
+    inventory_summary,
+    is_character_researched,
     list_heroes,
     list_owned_heroes,
     list_relics,
+    research_character,
     save_team,
     update_player,
 )
@@ -72,8 +76,10 @@ GUIDE_TOPICS = {
         "/start → create or reopen your account\n"
         "/main or /menu → open the main game menu\n"
         "/profile → generate your profile card\n"
-        "/char → browse your characters\n"
-        "/char NAME → search full moves, XP, unlocks, and evolution\n"
+        "/inventory → wallet, collection, relics, and reward access\n"
+        "/char NAME → global codex story, photo, moves, and research/evolution\n"
+        "/mychar NAME → your owned character, XP, stars, and actions\n"
+        "/daily and /weekly → timed signal rewards\n"
         "/guide → open this guide center\n"
         "/help → open the main menu",
     ),
@@ -95,13 +101,24 @@ GUIDE_TOPICS = {
         "New players begin with 2 Signal Shards. More Shard reward sources can be added through future events and missions.",
     ),
     "progression": (
-        "XP and evolution",
+        "Evolution and research",
         "<b>Player and character progression</b>\n\n"
         "Player XP → Patrol +15 · Case File +20 · battle victories +30 to +50\n"
         "Character XP → the active hero earns battle XP\n"
         "XP needed for the next level → current level × 100\n\n"
         "Moves unlock at their configured character levels. Locked moves appear in /char but not in battle.\n"
-        "Evolution requires character level 10 and 3 stars. Use the evolution button in /char.",
+        "Original CapeVerse characters may evolve at character level 10 with 3 stars.\n"
+        "Licensed suit generations and documented forms use Research Archives instead of evolution.\n"
+        "Use /mychar for owned progression and /char for global research information.",
+    ),
+    "inventory": (
+        "Inventory and rewards",
+        "<b>Inventory · Version 0.8</b>\n\n"
+        "Registration begins with 500 Cape Credits, 2 Signal Shards, 5 Patrol Intel, and 0 Prism Cores.\n"
+        "/inventory shows currencies, owned characters, relics, and research archives.\n\n"
+        "/daily gives a small credit, Intel, and XP reward.\n"
+        "/weekly gives Credits, Intel, XP, and one Signal Shard.\n"
+        "Claim timers and streaks are stored in MongoDB, so restarting the bot cannot reset them.",
     ),
     "combat": (
         "Combat",
@@ -280,13 +297,29 @@ def _character_detail_text(hero: dict, owned: dict | None = None) -> str:
         f"<b>{category.title()} moves</b>\n" + ("\n".join(grouped[category]) or "No moves")
         for category in ("normal", "defense", "special")
     )
-    evolution = (
-        "Evolved"
-        if owned.get("evolved")
-        else f"Base form · requires Lv 10 and 3 stars ({level}/10 · {owned.get('stars', 0)}/3)"
-        if owned
-        else "Evolution progress begins when collected"
-    )
+    licensed = str(hero.get("source", "")).startswith("Licensed")
+    if licensed:
+        concepts = hero.get("research_concepts", [])
+        evolution = "Licensed forms and suits use Research Archive entries, not evolution."
+        if concepts:
+            evolution += "\n" + "\n".join(
+                f"· Research → {escape(str(item.get('name', 'Archive entry')))} · Lv {item.get('unlock_level', 1)}"
+                for item in concepts[:4]
+            )
+    else:
+        evolution = (
+            "Evolved"
+            if owned.get("evolved")
+            else f"Base form · requires Lv 10 and 3 stars ({level}/10 · {owned.get('stars', 0)}/3)"
+            if owned
+            else "Evolution progress begins when collected"
+        )
+        concepts = hero.get("evolution_concepts", [])
+        if concepts:
+            evolution += "\n" + "\n".join(
+                f"· {escape(str(item.get('name', 'Evolution')))} · Lv {item.get('unlock_level', 10)}"
+                for item in concepts[:4]
+            )
     ownership = (
         f"Character level → <b>{level}</b> · XP {xp}/{next_xp}\nStars → {owned.get('stars', 0)}\n"
         if owned else "<i>Codex preview · not collected</i>\n"
@@ -319,11 +352,53 @@ def _find_character(query: str, telegram_id: int) -> tuple[dict | None, dict | N
 
 def _character_list_markup(telegram_id: int) -> InlineKeyboardMarkup:
     rows = [
-        [InlineKeyboardButton(f"{hero.get('name', 'Hero')} · Lv {hero.get('level', 1)}", callback_data=f"char:view:{hero['hero_key']}")]
+        [InlineKeyboardButton(f"{hero.get('name', 'Hero')} · Lv {hero.get('level', 1)}", callback_data=f"mychar:view:{hero['hero_key']}")]
         for hero in list_owned_heroes(telegram_id)[:12]
     ]
     rows.append([InlineKeyboardButton("← Main menu", callback_data="menu:home")])
     return InlineKeyboardMarkup(rows)
+
+
+def _global_character_markup() -> InlineKeyboardMarkup:
+    rows = [
+        [InlineKeyboardButton(
+            f"{rarity_mark(hero.get('rarity', 'Common'))} {hero.get('name', 'Character')}",
+            callback_data=f"char:view:{hero['hero_key']}",
+        )]
+        for hero in list_heroes()[:12]
+    ]
+    rows.append([InlineKeyboardButton("← Main menu", callback_data="menu:home")])
+    return InlineKeyboardMarkup(rows)
+
+
+def _character_actions(hero: dict, owned: dict | None) -> InlineKeyboardMarkup:
+    rows = [[InlineKeyboardButton("Full stats & moves →", callback_data=f"char:stats:{hero['hero_key']}")]]
+    if str(hero.get("source", "")).startswith("Licensed"):
+        rows.append([InlineKeyboardButton("Research archive →", callback_data=f"char:research:{hero['hero_key']}")])
+    elif owned and not owned.get("evolved"):
+        rows.append([InlineKeyboardButton("Evolution guide / evolve →", callback_data=f"char:evolve:{hero['hero_key']}")])
+    if owned:
+        rows.append([InlineKeyboardButton("View my copy →", callback_data=f"mychar:view:{hero['hero_key']}")])
+    rows.append([InlineKeyboardButton("Global codex", callback_data="char:global")])
+    rows.append([InlineKeyboardButton("My characters", callback_data="mychar:list")])
+    return InlineKeyboardMarkup(rows)
+
+
+def _inventory_text(telegram_id: int) -> str:
+    inventory = inventory_summary(telegram_id)
+    return (
+        "<b>CapeVerse Inventory · v0.8</b>\n\n"
+        "<b>Wallet</b>\n"
+        f"Cape Credits → <b>{inventory['credits']}</b>\n"
+        f"Signal Shards → <b>{inventory['signal_shards']}</b>\n"
+        f"Prism Cores → <b>{inventory['prism_cores']}</b>\n"
+        f"Patrol Intel → <b>{inventory['patrol_intel']}</b>\n\n"
+        "<b>Collection</b>\n"
+        f"Owned characters → {inventory['heroes']}\n"
+        f"Relics → {inventory['relics']}\n"
+        f"Research archives → {inventory['research']}\n\n"
+        "Daily and weekly rewards appear below."
+    )
 
 
 def _character_card_caption(hero: dict, owned: dict | None) -> str:
@@ -332,12 +407,37 @@ def _character_card_caption(hero: dict, owned: dict | None) -> str:
             f"<b>{escape(str(hero.get('name', 'Character')))}</b>\n"
             f"{escape(str(hero.get('codename', '')))} · Level {owned.get('level', 1)} · ★ {owned.get('stars', 0)}\n"
             f"{escape(str(hero.get('origin_type', 'Unknown type')))} · {escape(str(hero.get('rarity', 'Common')))}\n\n"
-            "Full move and evolution details are shown below."
+            f"{escape(str(hero.get('description', 'No story available.'))[:520])}\n\n"
+            "Full progression details are shown below."
         )
     return (
         f"<b>{escape(str(hero.get('name', 'Character')))}</b>\n"
-        f"{escape(str(hero.get('codename', '')))} · Codex preview\n\n"
-        "Full move and evolution details are shown below."
+        f"{escape(str(hero.get('codename', '')))} · Global Codex\n"
+        f"{escape(str(hero.get('origin_type', 'Unknown type')))} · {escape(str(hero.get('rarity', 'Common')))}\n\n"
+        f"{escape(str(hero.get('description', 'No story available.'))[:600])}"
+    )
+
+
+async def _send_global_character(message, hero: dict, telegram_id: int) -> None:
+    owned = get_owned_hero(telegram_id, hero["hero_key"])
+    photo = hero.get("image_url")
+    if photo:
+        try:
+            await message.reply_photo(
+                photo=photo,
+                caption=_character_card_caption(hero, None),
+                parse_mode="html",
+                reply_markup=_character_actions(hero, owned),
+            )
+            return
+        except Exception:
+            pass
+    card = generate_character_card(hero, None)
+    await message.reply_photo(
+        photo=str(card),
+        caption=_character_card_caption(hero, None),
+        parse_mode="html",
+        reply_markup=_character_actions(hero, owned),
     )
 
 
@@ -415,32 +515,97 @@ async def char_command(client, message):
     _player(message)
     parts = (message.text or "").split(maxsplit=1)
     if len(parts) == 1:
-        heroes = list_owned_heroes(message.from_user.id)
-        text = (
-            "<b>Character search</b>\n\n"
-            "Choose one of your characters or send:\n"
+        await message.reply_text(
+            "<b>Global Character Codex</b>\n\n"
+            "Choose a published character or send:\n"
             "<code>/char character name</code>\n\n"
-            "The result includes level, XP, evolution, all moves, unlock levels, cooldowns, effects, and damage."
+            "This shows global story, artwork, moves, and research/evolution information.",
+            parse_mode="html",
+            reply_markup=_global_character_markup(),
         )
-        if not heroes:
-            text += "\n\nYou have not collected a character yet."
-        await message.reply_text(text, parse_mode="html", reply_markup=_character_list_markup(message.from_user.id))
         return
-    hero, owned = _find_character(parts[1], message.from_user.id)
+    hero, _ = _find_character(parts[1], message.from_user.id)
     if not hero:
         await message.reply_text("<b>Character not found</b>\n\nSearch using the exact name, codename, or character key.", parse_mode="html")
         return
+    await _send_global_character(message, hero, message.from_user.id)
+
+
+async def mychar_command(client, message):
+    _player(message)
+    parts = (message.text or "").split(maxsplit=1)
+    if len(parts) == 1:
+        await message.reply_text(
+            "<b>My Characters</b>\n\nChoose your owned character or send:\n"
+            "<code>/mychar character name</code>",
+            parse_mode="html",
+            reply_markup=_character_list_markup(message.from_user.id),
+        )
+        return
+    hero, owned = _find_character(parts[1], message.from_user.id)
+    if not hero or not owned:
+        await message.reply_text("<b>Owned character not found</b>\n\nUse /char NAME for global codex data.", parse_mode="html")
+        return
     card = generate_character_card(hero, owned)
-    markup_rows = []
-    if owned and not owned.get("evolved"):
-        markup_rows.append([InlineKeyboardButton("Attempt evolution →", callback_data=f"char:evolve:{hero['hero_key']}")])
-    markup_rows.append([InlineKeyboardButton("My characters", callback_data="char:list")])
     await message.reply_photo(
         photo=str(card),
         caption=_character_card_caption(hero, owned),
         parse_mode="html",
+        reply_markup=_character_actions(hero, owned),
     )
-    await message.reply_text(_character_detail_text(hero, owned), parse_mode="html", reply_markup=InlineKeyboardMarkup(markup_rows))
+    await message.reply_text(_character_detail_text(hero, owned), parse_mode="html")
+
+
+async def inventory_command(client, message):
+    _player(message)
+    await message.reply_text(
+        _inventory_text(message.from_user.id),
+        parse_mode="html",
+        reply_markup=InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("Daily reward", callback_data="reward:daily"),
+                InlineKeyboardButton("Weekly reward", callback_data="reward:weekly"),
+            ],
+            [
+                InlineKeyboardButton("My characters", callback_data="mychar:list"),
+                InlineKeyboardButton("Relics", callback_data="menu:relics"),
+            ],
+            [InlineKeyboardButton("← Main menu", callback_data="menu:home")],
+        ]),
+    )
+
+
+async def _claim_reward_message(message, telegram_id: int, period: str) -> None:
+    result = claim_timed_reward(telegram_id, period)
+    if not result["ok"]:
+        next_claim = result.get("next_claim_at")
+        when = next_claim.strftime("%d %b %Y · %H:%M UTC") if next_claim else "later"
+        await message.reply_text(
+            f"<b>{period.title()} reward already claimed</b>\n\nNext claim → {when}",
+            parse_mode="html",
+        )
+        return
+    reward = result["rewards"]
+    await message.reply_text(
+        f"<b>{period.title()} signal claimed</b>\n\n"
+        f"Cape Credits → +{reward['credits']}\n"
+        f"Patrol Intel → +{reward['patrol_intel']}\n"
+        f"Signal Shards → +{reward['signal_shards']}\n"
+        f"Player XP → +{reward['xp']}\n"
+        f"Streak → {result['streak']}",
+        parse_mode="html",
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Open inventory", callback_data="menu:inventory")]]),
+    )
+
+
+async def daily_command(client, message):
+    _player(message)
+    await _claim_reward_message(message, message.from_user.id, "daily")
+
+
+async def weekly_command(client, message):
+    _player(message)
+    await _claim_reward_message(message, message.from_user.id, "weekly")
 
 
 async def callback_handler(client, callback_query):
@@ -450,7 +615,7 @@ async def callback_handler(client, callback_query):
     user_id = callback_query.from_user.id
     await callback_query.answer()
 
-    if data == "char:list":
+    if data in {"char:list", "mychar:list"}:
         if getattr(callback_query.message, "photo", None):
             await callback_query.message.delete()
             await client.send_message(
@@ -466,6 +631,13 @@ async def callback_handler(client, callback_query):
                 reply_markup=_character_list_markup(user_id),
             )
         return
+    if data == "char:global":
+        await callback_query.message.reply_text(
+            "<b>Global Character Codex</b>\n\nChoose a published character →",
+            parse_mode="html",
+            reply_markup=_global_character_markup(),
+        )
+        return
     if data.startswith("char:view:"):
         hero_key = data.split(":", 2)[2]
         hero = get_hero(hero_key)
@@ -473,25 +645,69 @@ async def callback_handler(client, callback_query):
         if not hero:
             await callback_query.message.reply_text("<b>Character unavailable</b>", parse_mode="html")
             return
+        await _send_global_character(callback_query.message, hero, user_id)
+        return
+    if data.startswith("mychar:view:"):
+        hero_key = data.split(":", 2)[2]
+        hero = get_hero(hero_key)
+        owned = get_owned_hero(user_id, hero_key)
+        if not hero or not owned:
+            await callback_query.message.reply_text("<b>Owned character unavailable</b>", parse_mode="html")
+            return
         card = generate_character_card(hero, owned)
-        rows = []
-        if owned and not owned.get("evolved"):
-            rows.append([InlineKeyboardButton("Attempt evolution →", callback_data=f"char:evolve:{hero_key}")])
-        rows.append([InlineKeyboardButton("My characters", callback_data="char:list")])
         await callback_query.message.reply_photo(
             photo=str(card),
             caption=_character_card_caption(hero, owned),
             parse_mode="html",
+            reply_markup=_character_actions(hero, owned),
         )
-        await callback_query.message.reply_text(_character_detail_text(hero, owned), parse_mode="html", reply_markup=InlineKeyboardMarkup(rows))
+        await callback_query.message.reply_text(_character_detail_text(hero, owned), parse_mode="html")
+        return
+    if data.startswith("char:stats:"):
+        hero_key = data.split(":", 2)[2]
+        hero = get_hero(hero_key)
+        if not hero:
+            return
+        owned = get_owned_hero(user_id, hero_key)
+        await callback_query.message.reply_text(
+            _character_detail_text(hero, owned),
+            parse_mode="html",
+            reply_markup=_character_actions(hero, owned),
+        )
+        return
+    if data.startswith("char:research:"):
+        hero_key = data.split(":", 2)[2]
+        result = research_character(user_id, hero_key)
+        if not result["ok"]:
+            await callback_query.message.reply_text(f"<b>Research unavailable</b>\n\n{result['reason']}", parse_mode="html")
+            return
+        hero = result["hero"]
+        status = "New archive unlocked" if result["new"] else "Archive already researched"
+        concepts = hero.get("research_concepts", [])
+        concept_text = "\n".join(
+            f"· <b>{escape(str(item.get('name', 'Suit archive')))}</b>\n  {escape(str(item.get('description', ''))[:220])}"
+            for item in concepts[:4]
+        ) or "The owner has not added suit/form research entries yet."
+        await callback_query.message.reply_text(
+            f"<b>{status}</b>\n\n{escape(str(hero.get('name', hero_key)))}\n\n{concept_text}\n\n"
+            "Licensed suits and forms are documented as research; they do not replace character evolution.",
+            parse_mode="html",
+        )
+        await log_event(client, "Character research", f"{hero.get('name', hero_key)} archive viewed", user_id)
         return
     if data.startswith("char:evolve:"):
         hero_key = data.split(":", 2)[2]
+        hero = get_hero(hero_key) or {}
+        if str(hero.get("source", "")).startswith("Licensed"):
+            await callback_query.message.reply_text(
+                "<b>Use Research Archive</b>\n\nLicensed suits and documented forms are research entries, not evolutions.",
+                parse_mode="html",
+            )
+            return
         result = evolve_character(user_id, hero_key)
         if not result["ok"]:
             await callback_query.message.reply_text(f"<b>Evolution unavailable</b>\n\n{result['reason']}", parse_mode="html")
             return
-        hero = get_hero(hero_key) or {}
         owned = result["character"]
         await callback_query.message.reply_text(
             f"<b>Evolution complete</b>\n\n{escape(str(hero.get('name', hero_key)))} reached an evolved form.\n"
@@ -521,6 +737,8 @@ async def callback_handler(client, callback_query):
             await callback_query.message.edit_text(
                 f"<b>Origin saved → {label}</b>\n\n"
                 f"Passive → <b>{passive}</b>\n\n"
+                "<b>Default inventory</b>\n"
+                "Cape Credits → 500\nSignal Shards → 2\nPatrol Intel → 5\nPrism Cores → 0\n\n"
                 "No starter hero is published for this Origin yet.\n"
                 "The owner must add one with /submithero → StarterOrigin.",
                 parse_mode="html",
@@ -531,10 +749,16 @@ async def callback_handler(client, callback_query):
             f"<b>Origin locked → {label}</b>\n\n"
             f"Passive → <b>{passive}</b>\n"
             f"Starter → {hero['name']}\n\n"
-            "Team 1 is ready.\nYour first threat is waiting →",
+            "<b>Default inventory</b>\n"
+            "Cape Credits → 500\nSignal Shards → 2\nPatrol Intel → 5\nPrism Cores → 0\n\n"
+            "Team 1 is ready. Choose your next step →",
             parse_mode="html",
             reply_markup=InlineKeyboardMarkup(
-                [[InlineKeyboardButton("Begin first battle →", callback_data="menu:battle")], [InlineKeyboardButton("Main menu", callback_data="menu:home")]]
+                [
+                    [InlineKeyboardButton("Open inventory →", callback_data="menu:inventory")],
+                    [InlineKeyboardButton("Begin first battle →", callback_data="menu:battle")],
+                    [InlineKeyboardButton("Main menu", callback_data="menu:home")],
+                ]
             ),
         )
         return
@@ -557,6 +781,23 @@ async def callback_handler(client, callback_query):
         return
     if data == "menu:profile":
         await show_profile(callback_query.message, edit=True, telegram_id=user_id)
+        return
+    if data == "menu:inventory":
+        await callback_query.message.reply_text(
+            _inventory_text(user_id),
+            parse_mode="html",
+            reply_markup=InlineKeyboardMarkup([
+                [
+                    InlineKeyboardButton("Daily reward", callback_data="reward:daily"),
+                    InlineKeyboardButton("Weekly reward", callback_data="reward:weekly"),
+                ],
+                [InlineKeyboardButton("My characters", callback_data="mychar:list")],
+                [InlineKeyboardButton("← Main menu", callback_data="menu:home")],
+            ]),
+        )
+        return
+    if data in {"reward:daily", "reward:weekly"}:
+        await _claim_reward_message(callback_query.message, user_id, data.split(":", 1)[1])
         return
     if data == "menu:guide":
         await send_guide_menu(callback_query.message, edit=True)
@@ -825,4 +1066,8 @@ def register(client) -> None:
     client.add_handler(MessageHandler(menu_command, filters.command(["main", "menu", "help"])))
     client.add_handler(MessageHandler(profile_command, filters.command("profile")))
     client.add_handler(MessageHandler(char_command, filters.command("char")))
+    client.add_handler(MessageHandler(mychar_command, filters.command("mychar")))
+    client.add_handler(MessageHandler(inventory_command, filters.command("inventory")))
+    client.add_handler(MessageHandler(daily_command, filters.command("daily")))
+    client.add_handler(MessageHandler(weekly_command, filters.command("weekly")))
     client.add_handler(CallbackQueryHandler(callback_handler))

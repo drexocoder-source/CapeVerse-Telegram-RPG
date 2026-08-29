@@ -1,5 +1,11 @@
 # CapeVerse
 
+## Current release direction
+
+- The active feature set is Version 0.8.
+- Version 2 is a future roadmap only; see `VERSION_2_ROADMAP.md`.
+- Original CapeVerse characters may evolve. Licensed suits and documented forms use Research Archives instead of evolution.
+
 CapeVerse is a Kurigram-powered Telegram superhero collection RPG with MongoDB persistence, clean symbol-led messaging, a generated player guide, and bot-based owner controls.
 
 ## Run & Operate

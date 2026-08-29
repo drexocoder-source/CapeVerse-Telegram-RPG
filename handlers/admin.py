@@ -1,4 +1,5 @@
 import os
+from html import escape
 from typing import Any
 
 from pyrogram import filters
@@ -97,13 +98,64 @@ def pending_markup(items: list[dict[str, Any]]) -> InlineKeyboardMarkup:
     for item in items[:12]:
         item_id = str(item["_id"])
         rows.append(
-            [
-                InlineKeyboardButton(f"Approve {item['title'][:18]}", callback_data=f"admin:approve:{item_id}"),
-                InlineKeyboardButton("Reject", callback_data=f"admin:reject:{item_id}"),
-            ]
+            [InlineKeyboardButton(f"View → {item['title'][:24]}", callback_data=f"admin:details:{item_id}")]
         )
     rows.append([InlineKeyboardButton("← Owner panel", callback_data="admin:home")])
     return InlineKeyboardMarkup(rows)
+
+
+def review_markup(submission_id: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("Approve →", callback_data=f"admin:approve:{submission_id}"),
+            InlineKeyboardButton("Reject", callback_data=f"admin:reject:{submission_id}"),
+        ],
+        [InlineKeyboardButton("← Approval queue", callback_data="admin:pending")],
+    ])
+
+
+def submission_detail_text(item: dict[str, Any]) -> str:
+    payload = item.get("payload", {})
+    lines = [
+        f"<b>{escape(str(item.get('title', 'Untitled')))}</b> · {escape(str(item.get('content_kind', 'content')))}",
+        "",
+        f"Type → {escape(str(payload.get('origin_type', payload.get('enemy_type', 'Unknown'))))}",
+        f"Source → {escape(str(payload.get('source', 'Unknown')))}",
+        f"Rights → <b>{escape(str(payload.get('rights_status', 'unverified')))}</b>",
+        f"Universe → {escape(str(payload.get('universe', 'Unknown')))}",
+        f"Place → {escape(str(payload.get('place', 'Unknown')))}",
+        f"Faction → {escape(str(payload.get('faction', 'None')))}",
+        f"Role / rarity → {escape(str(payload.get('role', 'Unknown')))} · {escape(str(payload.get('rarity', 'Unknown')))}",
+        "",
+        "<b>Story</b>",
+        escape(str(payload.get("description", "No story"))[:400]),
+        "",
+        "<b>Move direction</b>",
+        escape(str(payload.get("move_direction", "Not provided"))[:250]),
+    ]
+    if item.get("content_kind") == "villain":
+        lines.extend([
+            "",
+            f"HP / attack → {payload.get('hp', 0)} / {payload.get('attack', 0)}",
+            f"Player level range → {payload.get('min_level', 1)}–{payload.get('max_level', 100)}",
+        ])
+    for category in ("normal", "defense", "special"):
+        lines.extend(["", f"<b>{category.title()} moves</b>"])
+        for move in payload.get("move_sets", {}).get(category, []):
+            lines.append(
+                f"· {escape(str(move.get('name', 'Move')))} · {move.get('damage', 0)} dmg · "
+                f"Lv {move.get('unlock_level', 1)} · CD {move.get('cooldown', 0)}\n"
+                f"  {escape(str(move.get('description', ''))[:80])} · Effect: {escape(str(move.get('effect', 'none'))[:60])}"
+            )
+    progress_key = "research_concepts" if str(payload.get("source", "")).startswith("Licensed") else "evolution_concepts"
+    title = "Research archive" if progress_key == "research_concepts" else "Evolution concepts"
+    lines.extend(["", f"<b>{title}</b>"])
+    for concept in payload.get(progress_key, []):
+        lines.append(
+            f"· {escape(str(concept.get('name', 'Concept')))} · Lv {concept.get('unlock_level', 1)}\n"
+            f"  {escape(str(concept.get('description', ''))[:80])}"
+        )
+    return "\n".join(lines)
 
 
 def character_edit_markup() -> InlineKeyboardMarkup:
@@ -111,6 +163,10 @@ def character_edit_markup() -> InlineKeyboardMarkup:
         [
             InlineKeyboardButton("Story", callback_data="admin:editfield:description"),
             InlineKeyboardButton("Place", callback_data="admin:editfield:place"),
+        ],
+        [
+            InlineKeyboardButton("Move direction", callback_data="admin:editfield:move_direction"),
+            InlineKeyboardButton("Image", callback_data="admin:editfield:image_url"),
         ],
         [
             InlineKeyboardButton("Character type", callback_data="admin:editfield:origin_type"),
@@ -433,6 +489,32 @@ async def admin_callback(client, callback_query):
         else:
             prompt = f"Send the new {field.replace('_', ' ')}."
         await callback_query.message.reply_text(f"<b>Edit {field.replace('_', ' ')}</b>\n\n{prompt}", parse_mode="html")
+    elif action[1] == "details":
+        submission_id = action[2]
+        item = next((entry for entry in list_submissions("pending") if str(entry["_id"]) == submission_id), None)
+        if not item:
+            await callback_query.message.reply_text("<b>Submission unavailable</b>", parse_mode="html")
+            return
+        payload = item.get("payload", {})
+        image_url = payload.get("image_url")
+        if image_url:
+            try:
+                await callback_query.message.reply_photo(
+                    photo=image_url,
+                    caption=(
+                        f"<b>{escape(str(item.get('title', 'Submission')))}</b>\n"
+                        f"{escape(str(payload.get('codename', payload.get('enemy_type', ''))))}\n"
+                        "Full approval dossier follows."
+                    ),
+                    parse_mode="html",
+                )
+            except Exception:
+                pass
+        await callback_query.message.reply_text(
+            submission_detail_text(item),
+            parse_mode="html",
+            reply_markup=review_markup(submission_id),
+        )
     elif action[1] == "perm":
         target_id = int(action[2])
         permission = action[3]

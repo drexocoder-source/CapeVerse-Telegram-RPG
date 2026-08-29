@@ -34,7 +34,7 @@ def main_menu_markup() -> InlineKeyboardMarkup:
             ],
             [
                 InlineKeyboardButton("Recruit", callback_data="menu:recruit"),
-                InlineKeyboardButton("Relics", callback_data="menu:relics"),
+                InlineKeyboardButton("Inventory", callback_data="menu:inventory"),
             ],
             [
                 InlineKeyboardButton("Team", callback_data="menu:team"),
@@ -47,7 +47,11 @@ def main_menu_markup() -> InlineKeyboardMarkup:
             [InlineKeyboardButton("Events →", callback_data="menu:events")],
             [
                 InlineKeyboardButton("Profile", callback_data="menu:profile"),
-                InlineKeyboardButton("Character card", callback_data="char:list"),
+                InlineKeyboardButton("My character", callback_data="mychar:list"),
+            ],
+            [
+                InlineKeyboardButton("Daily", callback_data="reward:daily"),
+                InlineKeyboardButton("Weekly", callback_data="reward:weekly"),
             ],
             [InlineKeyboardButton("Guide", callback_data="menu:guide")],
         ]
