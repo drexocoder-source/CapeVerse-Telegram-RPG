@@ -14,6 +14,10 @@ Version 2 is a future major update and is not part of the current Version 0.8 im
 - Owner web dashboard for content review, balance simulation, events, economy, and player moderation
 - Advanced AI balance laboratory that simulates battles before publishing new characters
 - Cooperative social features such as friends, spectating, replays, alliance chat links, and raid scheduling
+- Hard-economy progression with controlled currency faucets, upgrade sinks, pity safeguards, rarity-adjusted costs, and anti-inflation analytics
+- Career contracts, rotating patrol boards, difficult challenge chains, collection mastery, and long-term prestige progression
+- Faction reputation with Independent careers, custom owner-created factions, faction stores, territory conflicts, and faction-exclusive missions
+- Owner-configurable economy seasons with earning caps, reward tuning, audit reports, and rollback-safe balance changes
 
 ## Design rule
 

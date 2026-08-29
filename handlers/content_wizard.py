@@ -33,6 +33,7 @@ OPTIONS = {
     "enemy_role": ["Brute", "Assassin", "Controller", "Support", "Boss"],
     "universe": ["MCU", "DCU", "Bhoomi-1", "CapeVerse", "Other / new"],
     "origin_type": ["Human", "Enhanced Human", "Tech-Enhanced", "Mystic", "Alien", "Other / new"],
+    "faction": ["Independent", "CapeVerse Guardians", "Other / new"],
     "ai_assist": ["Generate with AI", "Enter moves manually"],
 }
 
@@ -42,7 +43,7 @@ HERO_STEPS = [
     {"field": "origin_type", "title": "Character type", "options": OPTIONS["origin_type"]},
     {"field": "universe", "title": "Universe", "options": OPTIONS["universe"]},
     {"field": "place", "title": "City or place", "prompt": "Type any city, district, planet, realm, or other place name."},
-    {"field": "faction", "title": "Faction", "prompt": "Which faction or team does the hero belong to?"},
+    {"field": "faction", "title": "Faction", "options": OPTIONS["faction"]},
     {"field": "image_url", "title": "Image URL", "prompt": "Send the Telegraph image URL from @vTelegraphBot.\nIt must begin with https://telegra.ph/ or https://graph.org/"},
     {"field": "source", "title": "Source", "options": OPTIONS["source"]},
     {"field": "rights_status", "title": "Rights status", "options": OPTIONS["rights_status"]},
@@ -64,7 +65,7 @@ VILLAIN_STEPS = [
     {"field": "origin_type", "title": "Character type", "options": OPTIONS["origin_type"]},
     {"field": "universe", "title": "Universe", "options": OPTIONS["universe"]},
     {"field": "place", "title": "City or place", "prompt": "Type any city, district, planet, realm, or other place name."},
-    {"field": "faction", "title": "Faction", "prompt": "Which faction or force does this enemy serve?"},
+    {"field": "faction", "title": "Faction", "options": OPTIONS["faction"]},
     {"field": "image_url", "title": "Image URL", "prompt": "Send the Telegraph image URL from @vTelegraphBot.\nIt must begin with https://telegra.ph/ or https://graph.org/"},
     {"field": "source", "title": "Source", "options": OPTIONS["source"]},
     {"field": "rights_status", "title": "Rights status", "options": OPTIONS["rights_status"]},
@@ -279,16 +280,18 @@ def _preview_text(wizard: dict[str, Any]) -> str:
 async def _preview(message, wizard: dict[str, Any], edit: bool = False) -> None:
     text = _preview_text(wizard)
     markup = InlineKeyboardMarkup([
-        [InlineKeyboardButton("Submit for approval →", callback_data="wizard:submit")],
+        [
+            InlineKeyboardButton("Submit →", callback_data="wizard:submit"),
+            InlineKeyboardButton("Regenerate AI", callback_data="wizard:regenerate"),
+        ],
         [
             InlineKeyboardButton("Edit story", callback_data="wizard:edit:description"),
             InlineKeyboardButton("Edit move brief", callback_data="wizard:edit:move_direction"),
         ],
         [
             InlineKeyboardButton("Edit moves", callback_data="wizard:edit:moves"),
-            InlineKeyboardButton("Regenerate AI", callback_data="wizard:regenerate"),
+            InlineKeyboardButton("Edit image", callback_data="wizard:edit:image_url"),
         ],
-        [InlineKeyboardButton("Edit image", callback_data="wizard:edit:image_url")],
         [InlineKeyboardButton("Cancel", callback_data="wizard:cancel")],
     ])
     image_url = wizard.get("payload", {}).get("image_url")

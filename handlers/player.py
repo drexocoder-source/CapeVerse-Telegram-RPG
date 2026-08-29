@@ -351,22 +351,31 @@ def _find_character(query: str, telegram_id: int) -> tuple[dict | None, dict | N
 
 
 def _character_list_markup(telegram_id: int) -> InlineKeyboardMarkup:
+    heroes = list_owned_heroes(telegram_id)[:12]
     rows = [
-        [InlineKeyboardButton(f"{hero.get('name', 'Hero')} · Lv {hero.get('level', 1)}", callback_data=f"mychar:view:{hero['hero_key']}")]
-        for hero in list_owned_heroes(telegram_id)[:12]
+        [
+            InlineKeyboardButton(
+                f"{hero.get('name', 'Hero')} · Lv {hero.get('level', 1)}",
+                callback_data=f"mychar:view:{hero['hero_key']}",
+            )
+        ]
+        for hero in heroes
     ]
     rows.append([InlineKeyboardButton("← Main menu", callback_data="menu:home")])
     return InlineKeyboardMarkup(rows)
 
 
 def _global_character_markup() -> InlineKeyboardMarkup:
-    rows = [
-        [InlineKeyboardButton(
-            f"{rarity_mark(hero.get('rarity', 'Common'))} {hero.get('name', 'Character')}",
-            callback_data=f"char:view:{hero['hero_key']}",
-        )]
-        for hero in list_heroes()[:12]
-    ]
+    heroes = list_heroes()[:12]
+    rows = []
+    for index in range(0, len(heroes), 2):
+        rows.append([
+            InlineKeyboardButton(
+                f"{rarity_mark(hero.get('rarity', 'Common'))} {hero.get('name', 'Character')[:18]}",
+                callback_data=f"char:view:{hero['hero_key']}",
+            )
+            for hero in heroes[index:index + 2]
+        ])
     rows.append([InlineKeyboardButton("← Main menu", callback_data="menu:home")])
     return InlineKeyboardMarkup(rows)
 
@@ -386,8 +395,10 @@ def _character_actions(hero: dict, owned: dict | None) -> InlineKeyboardMarkup:
 
 def _inventory_text(telegram_id: int) -> str:
     inventory = inventory_summary(telegram_id)
+    profile = get_profile(telegram_id) or {}
+    owner_name = escape(str(profile.get("first_name", "Player")))
     return (
-        "<b>CapeVerse Inventory · v0.8</b>\n\n"
+        f"<b>Inventory</b>\nOwner → <b>{owner_name}</b>\n\n"
         "<b>Wallet</b>\n"
         f"Cape Credits → <b>{inventory['credits']}</b>\n"
         f"Signal Shards → <b>{inventory['signal_shards']}</b>\n"
@@ -575,27 +586,38 @@ async def inventory_command(client, message):
     )
 
 
-async def _claim_reward_message(message, telegram_id: int, period: str) -> None:
+async def _claim_reward_message(message, telegram_id: int, period: str, edit: bool = False) -> None:
     result = claim_timed_reward(telegram_id, period)
     if not result["ok"]:
         next_claim = result.get("next_claim_at")
         when = next_claim.strftime("%d %b %Y · %H:%M UTC") if next_claim else "later"
-        await message.reply_text(
-            f"<b>{period.title()} reward already claimed</b>\n\nNext claim → {when}",
-            parse_mode="html",
-        )
+        text = f"<b>{period.title()} reward already claimed</b>\n\nNext claim → {when}"
+        if edit:
+            await _edit_callback(message, text, back_markup())
+        else:
+            await message.reply_text(text, parse_mode="html", reply_markup=back_markup())
         return
     reward = result["rewards"]
-    await message.reply_text(
+    text = (
         f"<b>{period.title()} signal claimed</b>\n\n"
         f"Cape Credits → +{reward['credits']}\n"
         f"Patrol Intel → +{reward['patrol_intel']}\n"
         f"Signal Shards → +{reward['signal_shards']}\n"
         f"Player XP → +{reward['xp']}\n"
-        f"Streak → {result['streak']}",
-        parse_mode="html",
-        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Open inventory", callback_data="menu:inventory")]]),
+        f"Streak → {result['streak']}"
     )
+    markup = InlineKeyboardMarkup([[InlineKeyboardButton("Inventory", callback_data="menu:inventory")]])
+    if edit:
+        await _edit_callback(message, text, markup)
+    else:
+        await message.reply_text(text, parse_mode="html", reply_markup=markup)
+
+
+async def _edit_callback(message, text: str, markup: InlineKeyboardMarkup | None = None) -> None:
+    if getattr(message, "photo", None):
+        await message.edit_caption(caption=text[:1024], parse_mode="html", reply_markup=markup)
+    else:
+        await message.edit_text(text, parse_mode="html", reply_markup=markup)
 
 
 async def daily_command(client, message):
@@ -616,26 +638,17 @@ async def callback_handler(client, callback_query):
     await callback_query.answer()
 
     if data in {"char:list", "mychar:list"}:
-        if getattr(callback_query.message, "photo", None):
-            await callback_query.message.delete()
-            await client.send_message(
-                callback_query.message.chat.id,
-                "<b>My characters</b>\n\nChoose a character →",
-                parse_mode="html",
-                reply_markup=_character_list_markup(user_id),
-            )
-        else:
-            await callback_query.message.edit_text(
-                "<b>My characters</b>\n\nChoose a character →",
-                parse_mode="html",
-                reply_markup=_character_list_markup(user_id),
-            )
+        await _edit_callback(
+            callback_query.message,
+            "<b>My characters</b>\n\nChoose a character →",
+            _character_list_markup(user_id),
+        )
         return
     if data == "char:global":
-        await callback_query.message.reply_text(
+        await _edit_callback(
+            callback_query.message,
             "<b>Global Character Codex</b>\n\nChoose a published character →",
-            parse_mode="html",
-            reply_markup=_global_character_markup(),
+            _global_character_markup(),
         )
         return
     if data.startswith("char:view:"):
@@ -645,7 +658,13 @@ async def callback_handler(client, callback_query):
         if not hero:
             await callback_query.message.reply_text("<b>Character unavailable</b>", parse_mode="html")
             return
-        await _send_global_character(callback_query.message, hero, user_id)
+        licensed = str(hero.get("source", "")).startswith("Licensed")
+        progression = "Research Archive" if licensed else "Evolution path"
+        await _edit_callback(
+            callback_query.message,
+            f"{_character_card_caption(hero, None)}\n\n{_character_detail_text(hero, owned)}\n\nProgression → {progression}",
+            _character_actions(hero, owned),
+        )
         return
     if data.startswith("mychar:view:"):
         hero_key = data.split(":", 2)[2]
@@ -655,13 +674,11 @@ async def callback_handler(client, callback_query):
             await callback_query.message.reply_text("<b>Owned character unavailable</b>", parse_mode="html")
             return
         card = generate_character_card(hero, owned)
-        await callback_query.message.reply_photo(
-            photo=str(card),
-            caption=_character_card_caption(hero, owned),
-            parse_mode="html",
-            reply_markup=_character_actions(hero, owned),
+        await _edit_callback(
+            callback_query.message,
+            f"{_character_card_caption(hero, owned)}\n\n{_character_detail_text(hero, owned)}",
+            _character_actions(hero, owned),
         )
-        await callback_query.message.reply_text(_character_detail_text(hero, owned), parse_mode="html")
         return
     if data.startswith("char:stats:"):
         hero_key = data.split(":", 2)[2]
@@ -669,17 +686,13 @@ async def callback_handler(client, callback_query):
         if not hero:
             return
         owned = get_owned_hero(user_id, hero_key)
-        await callback_query.message.reply_text(
-            _character_detail_text(hero, owned),
-            parse_mode="html",
-            reply_markup=_character_actions(hero, owned),
-        )
+        await _edit_callback(callback_query.message, _character_detail_text(hero, owned), _character_actions(hero, owned))
         return
     if data.startswith("char:research:"):
         hero_key = data.split(":", 2)[2]
         result = research_character(user_id, hero_key)
         if not result["ok"]:
-            await callback_query.message.reply_text(f"<b>Research unavailable</b>\n\n{result['reason']}", parse_mode="html")
+            await _edit_callback(callback_query.message, f"<b>Research unavailable</b>\n\n{result['reason']}", back_markup())
             return
         hero = result["hero"]
         status = "New archive unlocked" if result["new"] else "Archive already researched"
@@ -688,10 +701,11 @@ async def callback_handler(client, callback_query):
             f"· <b>{escape(str(item.get('name', 'Suit archive')))}</b>\n  {escape(str(item.get('description', ''))[:220])}"
             for item in concepts[:4]
         ) or "The owner has not added suit/form research entries yet."
-        await callback_query.message.reply_text(
+        await _edit_callback(
+            callback_query.message,
             f"<b>{status}</b>\n\n{escape(str(hero.get('name', hero_key)))}\n\n{concept_text}\n\n"
             "Licensed suits and forms are documented as research; they do not replace character evolution.",
-            parse_mode="html",
+            back_markup(),
         )
         await log_event(client, "Character research", f"{hero.get('name', hero_key)} archive viewed", user_id)
         return
@@ -699,20 +713,22 @@ async def callback_handler(client, callback_query):
         hero_key = data.split(":", 2)[2]
         hero = get_hero(hero_key) or {}
         if str(hero.get("source", "")).startswith("Licensed"):
-            await callback_query.message.reply_text(
+            await _edit_callback(
+                callback_query.message,
                 "<b>Use Research Archive</b>\n\nLicensed suits and documented forms are research entries, not evolutions.",
-                parse_mode="html",
+                back_markup(),
             )
             return
         result = evolve_character(user_id, hero_key)
         if not result["ok"]:
-            await callback_query.message.reply_text(f"<b>Evolution unavailable</b>\n\n{result['reason']}", parse_mode="html")
+            await _edit_callback(callback_query.message, f"<b>Evolution unavailable</b>\n\n{result['reason']}", back_markup())
             return
         owned = result["character"]
-        await callback_query.message.reply_text(
+        await _edit_callback(
+            callback_query.message,
             f"<b>Evolution complete</b>\n\n{escape(str(hero.get('name', hero_key)))} reached an evolved form.\n"
             "The character card and battle identity now show the evolution.",
-            parse_mode="html",
+            back_markup(),
         )
         await log_event(client, "Character evolution", f"{hero.get('name', hero_key)} evolved", user_id)
         return
@@ -764,29 +780,20 @@ async def callback_handler(client, callback_query):
         return
 
     if data == "menu:home":
-        if getattr(callback_query.message, "photo", None):
-            await callback_query.message.delete()
-            await client.send_message(
-                callback_query.message.chat.id,
-                "<b>CapeVerse</b>\n\nChoose your next move →",
-                parse_mode="html",
-                reply_markup=main_menu_markup(),
-            )
-            return
-        await callback_query.message.edit_text(
+        await _edit_callback(
+            callback_query.message,
             "<b>CapeVerse</b>\n\nChoose your next move →",
-            parse_mode="html",
-            reply_markup=main_menu_markup(),
+            main_menu_markup(),
         )
         return
     if data == "menu:profile":
         await show_profile(callback_query.message, edit=True, telegram_id=user_id)
         return
     if data == "menu:inventory":
-        await callback_query.message.reply_text(
+        await _edit_callback(
+            callback_query.message,
             _inventory_text(user_id),
-            parse_mode="html",
-            reply_markup=InlineKeyboardMarkup([
+            InlineKeyboardMarkup([
                 [
                     InlineKeyboardButton("Daily reward", callback_data="reward:daily"),
                     InlineKeyboardButton("Weekly reward", callback_data="reward:weekly"),
@@ -797,7 +804,7 @@ async def callback_handler(client, callback_query):
         )
         return
     if data in {"reward:daily", "reward:weekly"}:
-        await _claim_reward_message(callback_query.message, user_id, data.split(":", 1)[1])
+        await _claim_reward_message(callback_query.message, user_id, data.split(":", 1)[1], edit=True)
         return
     if data == "menu:guide":
         await send_guide_menu(callback_query.message, edit=True)

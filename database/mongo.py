@@ -174,9 +174,9 @@ def claim_timed_reward(telegram_id: int, period: str) -> dict[str, Any]:
         last_claim = last_claim.replace(tzinfo=timezone.utc)
     streak = int(previous.get("streak", 0)) + 1 if last_claim and current - last_claim <= interval * 2 else 1
     rewards = (
-        {"credits": 50 + min(25, streak * 5), "patrol_intel": 1, "signal_shards": 0, "xp": 10}
+        {"credits": 20 + min(10, streak * 2), "patrol_intel": 1 if streak % 3 == 0 else 0, "signal_shards": 0, "xp": 5}
         if period == "daily"
-        else {"credits": 250 + min(100, streak * 20), "patrol_intel": 2, "signal_shards": 1, "xp": 50}
+        else {"credits": 100 + min(40, streak * 10), "patrol_intel": 1, "signal_shards": 1 if streak % 2 == 0 else 0, "xp": 25}
     )
     updated = update_player(
         telegram_id,
