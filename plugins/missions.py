@@ -1,6 +1,6 @@
 from typing import Any
 
-from database.mongo import get_profile, record_ledger, update_player
+from database.mongo import get_profile, grant_user_xp, record_ledger, update_player
 
 
 def claim_patrol(telegram_id: int) -> dict[str, Any]:
@@ -13,7 +13,8 @@ def claim_patrol(telegram_id: int) -> dict[str, Any]:
         credits=profile.get("credits", 0) + 120,
     )
     record_ledger(telegram_id, "credits", 120, "Patrol reward", profile.get("credits", 0) + 120)
-    return {"ok": True, "credits": 120}
+    updated = grant_user_xp(telegram_id, 15) or {}
+    return {"ok": True, "credits": 120, "xp": 15, "level": updated.get("level", 1)}
 
 
 def complete_case(telegram_id: int, alignment: str) -> dict[str, Any]:
@@ -28,4 +29,5 @@ def complete_case(telegram_id: int, alignment: str) -> dict[str, Any]:
         credits=int(profile.get("credits", 0)) + reward,
     )
     record_ledger(telegram_id, "credits", reward, f"Case File choice: {alignment}", int(profile.get("credits", 0)) + reward)
-    return {"ok": True, "alignment": alignment, "credits": reward}
+    updated = grant_user_xp(telegram_id, 20) or {}
+    return {"ok": True, "alignment": alignment, "credits": reward, "xp": 20, "level": updated.get("level", 1)}

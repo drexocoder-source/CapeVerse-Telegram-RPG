@@ -47,8 +47,9 @@ def main_menu_markup() -> InlineKeyboardMarkup:
             [InlineKeyboardButton("Events →", callback_data="menu:events")],
             [
                 InlineKeyboardButton("Profile", callback_data="menu:profile"),
-                InlineKeyboardButton("Guide", callback_data="menu:guide"),
+                InlineKeyboardButton("Character card", callback_data="char:list"),
             ],
+            [InlineKeyboardButton("Guide", callback_data="menu:guide")],
         ]
     )
 
@@ -62,9 +63,13 @@ def profile_text(profile: dict[str, Any], owned_count: int, team_count: int, syn
     origin = profile.get("origin") or "Not chosen"
     rating = profile.get("rating", 1000)
     floor = profile.get("rift_floor", 1)
+    level = int(profile.get("level", 1))
+    xp = int(profile.get("xp", 0))
+    next_xp = max(100, level * 100)
     return (
         f"<b>{name}</b>\n"
         f"<i>CapeVerse player profile</i>\n\n"
+        f"Level   →  <b>{level}</b> · XP {xp}/{next_xp}\n"
         f"Origin  →  <b>{origin}</b>\n"
         f"Rank    →  <b>{rating}</b>\n"
         f"Rift    →  Floor {floor}\n"

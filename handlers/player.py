@@ -1,3 +1,4 @@
+from html import escape
 from pathlib import Path
 
 from pyrogram import filters
@@ -6,11 +7,15 @@ from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 from database.mongo import (
     add_hero_to_player,
+    evolve_character,
+    get_hero,
     get_or_create_user,
+    get_owned_hero,
     get_or_create_user_with_status,
     get_profile,
     get_starter_hero,
     get_team,
+    list_heroes,
     list_owned_heroes,
     list_relics,
     save_team,
@@ -25,7 +30,7 @@ from plugins.recruitment import pull
 from plugins.rift import start_rift
 from plugins.events import available_events, start_event_boss
 from utils.formatting import back_markup, main_menu_markup, origin_markup, profile_text, rarity_mark
-from utils.profile_card import generate_profile_card
+from utils.profile_card import generate_character_card, generate_profile_card
 from utils.audit import log_event
 
 
@@ -67,24 +72,46 @@ GUIDE_TOPICS = {
         "/start → create or reopen your account\n"
         "/main or /menu → open the main game menu\n"
         "/profile → generate your profile card\n"
+        "/char → browse your characters\n"
+        "/char NAME → search full moves, XP, unlocks, and evolution\n"
         "/guide → open this guide center\n"
         "/help → open the main menu",
     ),
     "heroes": (
         "Heroes and teams",
         "<b>Heroes and teams</b>\n\n"
-        "Heroes are published by the owner and grouped by universe, place, faction, role, rarity, and alignment.\n"
-        "A team holds up to three owned heroes. Duplicate pulls increase star progress.\n"
-        "Starter heroes are assigned by Origin only when the owner marks them as starters.",
+        "Heroes may be Human, Enhanced Human, Tech-Enhanced, Mystic, Alien, or another custom type.\n"
+        "They are grouped by universe, place, faction, role, rarity, and alignment.\n"
+        "A team holds up to three owned heroes. Duplicate pulls increase stars.\n"
+        "Use /char to see the designer card, character XP, moves, unlock levels, cooldowns, effects, and evolution.",
+    ),
+    "recruit": (
+        "Catching heroes",
+        "<b>Recruitment and collecting</b>\n\n"
+        "Open Recruitment Beacon from /main.\n"
+        "One pull costs 1 Signal Shard and gives one published hero.\n"
+        "A new hero joins your collection. A duplicate increases that hero’s stars.\n\n"
+        "Signal Boost rises by 10 after ordinary pulls. At 90, the next pull uses the Epic/Legendary/Mythic pool and the meter resets.\n"
+        "New players begin with 2 Signal Shards. More Shard reward sources can be added through future events and missions.",
+    ),
+    "progression": (
+        "XP and evolution",
+        "<b>Player and character progression</b>\n\n"
+        "Player XP → Patrol +15 · Case File +20 · battle victories +30 to +50\n"
+        "Character XP → the active hero earns battle XP\n"
+        "XP needed for the next level → current level × 100\n\n"
+        "Moves unlock at their configured character levels. Locked moves appear in /char but not in battle.\n"
+        "Evolution requires character level 10 and 3 stars. Use the evolution button in /char.",
     ),
     "combat": (
         "Combat",
         "<b>Combat</b>\n\n"
         "Signature → reliable character damage\n"
-        "Utility → lower damage but reduces the incoming counterattack\n"
-        "Ultimate → highest standard damage\n"
+        "Normal moves → standard attacks\n"
+        "Defense moves → reduce the incoming counterattack\n"
+        "Special moves → stronger attacks with higher levels or cooldowns\n"
         "Nemesis Ultimate → appears only against a linked villain\n\n"
-        "All move names and damage values come from the published character.",
+        "Only moves unlocked at the active character’s level appear. Used moves may enter cooldown.",
     ),
     "pve": (
         "PvE and Rift",
@@ -115,6 +142,8 @@ GUIDE_TOPICS = {
         "/submitevent → event submission\n"
         "/pending → approval queue\n"
         "/test → safe PvE simulation\n"
+        "/editchar CHARACTER_KEY → edit a published character\n"
+        "/playersearch NAME_OR_ID → owner/moderator player card search\n"
         "/cancel → cancel an active content wizard",
     ),
 }
@@ -169,19 +198,27 @@ def _battle_markup(
     mode: str = "",
     move_names: dict | None = None,
     nemesis_available: bool = False,
+    moves: list[dict] | None = None,
+    cooldowns: dict | None = None,
 ) -> InlineKeyboardMarkup:
     if finished:
         return InlineKeyboardMarkup([[InlineKeyboardButton("← Main menu", callback_data="menu:home")]])
     names = move_names or {}
-    rows = [
-            [
-                InlineKeyboardButton(f"{names.get('signature', 'Signature')[:22]} →", callback_data=f"battle:{battle_id}:signature"),
-                InlineKeyboardButton(f"{names.get('utility', 'Utility')[:22]} →", callback_data=f"battle:{battle_id}:utility"),
-            ],
-            [InlineKeyboardButton(f"{names.get('ultimate', 'Ultimate')[:28]} →", callback_data=f"battle:{battle_id}:ultimate")],
+    available = moves or [
+        {"key": "signature", "name": names.get("signature", "Signature")},
+        {"key": "utility", "name": names.get("utility", "Utility")},
+        {"key": "ultimate", "name": names.get("ultimate", "Ultimate")},
     ]
-    if nemesis_available:
-        rows.append([InlineKeyboardButton(f"{names.get('nemesis', 'Nemesis Ultimate')[:28]} →", callback_data=f"battle:{battle_id}:nemesis")])
+    cooldowns = cooldowns or {}
+    buttons = []
+    for move in available:
+        remaining = int(cooldowns.get(move["key"], 0))
+        suffix = f" · CD {remaining}" if remaining else " →"
+        buttons.append(InlineKeyboardButton(
+            f"{str(move.get('name', 'Move'))[:20]}{suffix}",
+            callback_data=f"battle:{battle_id}:{move['key']}",
+        ))
+    rows = [buttons[index:index + 2] for index in range(0, len(buttons), 2)]
     rows.append([InlineKeyboardButton("← Main menu", callback_data="menu:home")])
     return InlineKeyboardMarkup(rows)
 
@@ -201,10 +238,106 @@ def _battle_text(battle: dict, enemy_name: str | None = None) -> str:
     return (
         f"<b>{battle.get('stage', 'Battle')}</b>\n\n"
         f"<b>{enemy_name or battle.get('enemy_name', 'Threat')}</b>\n"
-        f"{bar(enemy_hp, enemy_max)}  {enemy_hp}/{enemy_max} HP\n\n"
+        f"Level {battle.get('enemy_level', 1)} · {bar(enemy_hp, enemy_max)}  {enemy_hp}/{enemy_max} HP\n\n"
         f"<b>{battle.get('actor_name', 'Your hero')}</b>\n"
-        f"{bar(player_hp, player_max)}  {player_hp}/{player_max} HP\n\n"
+        f"Level {battle.get('actor_level', 1)} · {bar(player_hp, player_max)}  {player_hp}/{player_max} HP\n\n"
         f"Turn {battle.get('turn', 1)} → choose a move{log_line}"
+    )
+
+
+def _all_moves(hero: dict) -> list[dict]:
+    move_sets = hero.get("move_sets") or {}
+    moves: list[dict] = []
+    for category in ("normal", "defense", "special"):
+        for move in move_sets.get(category, []):
+            moves.append({**move, "category": category})
+    if moves:
+        return moves
+    return [
+        {"category": "normal", "name": hero.get("ability_signature", "Signature Move"), "description": "", "damage": hero.get("signature_damage", 24), "unlock_level": 1, "cooldown": 0},
+        {"category": "defense", "name": hero.get("ability_utility", "Guard"), "description": "", "damage": hero.get("utility_damage", 0), "unlock_level": 1, "cooldown": 1},
+        {"category": "special", "name": hero.get("ability_ultimate", "Ultimate"), "description": "", "damage": hero.get("ultimate_damage", 38), "unlock_level": 1, "cooldown": 2},
+    ]
+
+
+def _character_detail_text(hero: dict, owned: dict | None = None) -> str:
+    owned = owned or {}
+    level = int(owned.get("level", 1))
+    xp = int(owned.get("xp", 0))
+    next_xp = max(100, level * 100)
+    grouped: dict[str, list[str]] = {"normal": [], "defense": [], "special": []}
+    for move in _all_moves(hero):
+        unlock = int(move.get("unlock_level", 1))
+        state = "UNLOCKED" if owned and level >= unlock else f"LOCKED · Lv {unlock}"
+        if not owned:
+            state = f"Unlock Lv {unlock}"
+        grouped[move["category"]].append(
+            f"· <b>{escape(str(move.get('name', 'Move')))}</b> · {move.get('damage', 0)} damage · CD {move.get('cooldown', 0)}\n"
+            f"  {state} · {escape(str(move.get('description', ''))[:180])}\n"
+            f"  Effect → {escape(str(move.get('effect', 'none'))[:100])}"
+        )
+    move_text = "\n\n".join(
+        f"<b>{category.title()} moves</b>\n" + ("\n".join(grouped[category]) or "No moves")
+        for category in ("normal", "defense", "special")
+    )
+    evolution = (
+        "Evolved"
+        if owned.get("evolved")
+        else f"Base form · requires Lv 10 and 3 stars ({level}/10 · {owned.get('stars', 0)}/3)"
+        if owned
+        else "Evolution progress begins when collected"
+    )
+    ownership = (
+        f"Character level → <b>{level}</b> · XP {xp}/{next_xp}\nStars → {owned.get('stars', 0)}\n"
+        if owned else "<i>Codex preview · not collected</i>\n"
+    )
+    return (
+        f"<b>{escape(str(hero.get('name', 'Unknown character')))}</b> · {escape(str(hero.get('codename', '')))}\n"
+        f"{escape(str(hero.get('origin_type', 'Unknown type')))} · {escape(str(hero.get('rarity', 'Common')))} · {escape(str(hero.get('role', 'Unknown role')))}\n"
+        f"Universe → {escape(str(hero.get('universe', 'Unknown')))}\n"
+        f"Place → {escape(str(hero.get('place', 'Unknown')))}\n"
+        f"Faction → {escape(str(hero.get('faction', 'None')))}\n\n"
+        f"{ownership}"
+        f"Evolution → {evolution}\n\n"
+        f"{escape(str(hero.get('description', 'No story available.'))[:700])}\n\n"
+        f"{move_text}"
+    )
+
+
+def _find_character(query: str, telegram_id: int) -> tuple[dict | None, dict | None]:
+    query_lower = query.strip().lower()
+    owned_list = list_owned_heroes(telegram_id)
+    for owned in owned_list:
+        if query_lower in {str(owned.get("hero_key", "")).lower(), str(owned.get("name", "")).lower()}:
+            return get_hero(owned["hero_key"]), owned
+    for hero in list_heroes():
+        fields = {str(hero.get(key, "")).lower() for key in ("hero_key", "name", "codename")}
+        if query_lower in fields or any(query_lower in field for field in fields):
+            return hero, get_owned_hero(telegram_id, hero["hero_key"])
+    return None, None
+
+
+def _character_list_markup(telegram_id: int) -> InlineKeyboardMarkup:
+    rows = [
+        [InlineKeyboardButton(f"{hero.get('name', 'Hero')} · Lv {hero.get('level', 1)}", callback_data=f"char:view:{hero['hero_key']}")]
+        for hero in list_owned_heroes(telegram_id)[:12]
+    ]
+    rows.append([InlineKeyboardButton("← Main menu", callback_data="menu:home")])
+    return InlineKeyboardMarkup(rows)
+
+
+def _character_card_caption(hero: dict, owned: dict | None) -> str:
+    if owned:
+        return (
+            f"<b>{escape(str(hero.get('name', 'Character')))}</b>\n"
+            f"{escape(str(hero.get('codename', '')))} · Level {owned.get('level', 1)} · ★ {owned.get('stars', 0)}\n"
+            f"{escape(str(hero.get('origin_type', 'Unknown type')))} · {escape(str(hero.get('rarity', 'Common')))}\n\n"
+            "Full move and evolution details are shown below."
+        )
+    return (
+        f"<b>{escape(str(hero.get('name', 'Character')))}</b>\n"
+        f"{escape(str(hero.get('codename', '')))} · Codex preview\n\n"
+        "Full move and evolution details are shown below."
     )
 
 
@@ -278,12 +411,95 @@ async def profile_command(client, message):
     await show_profile(message)
 
 
+async def char_command(client, message):
+    _player(message)
+    parts = (message.text or "").split(maxsplit=1)
+    if len(parts) == 1:
+        heroes = list_owned_heroes(message.from_user.id)
+        text = (
+            "<b>Character search</b>\n\n"
+            "Choose one of your characters or send:\n"
+            "<code>/char character name</code>\n\n"
+            "The result includes level, XP, evolution, all moves, unlock levels, cooldowns, effects, and damage."
+        )
+        if not heroes:
+            text += "\n\nYou have not collected a character yet."
+        await message.reply_text(text, parse_mode="html", reply_markup=_character_list_markup(message.from_user.id))
+        return
+    hero, owned = _find_character(parts[1], message.from_user.id)
+    if not hero:
+        await message.reply_text("<b>Character not found</b>\n\nSearch using the exact name, codename, or character key.", parse_mode="html")
+        return
+    card = generate_character_card(hero, owned)
+    markup_rows = []
+    if owned and not owned.get("evolved"):
+        markup_rows.append([InlineKeyboardButton("Attempt evolution →", callback_data=f"char:evolve:{hero['hero_key']}")])
+    markup_rows.append([InlineKeyboardButton("My characters", callback_data="char:list")])
+    await message.reply_photo(
+        photo=str(card),
+        caption=_character_card_caption(hero, owned),
+        parse_mode="html",
+    )
+    await message.reply_text(_character_detail_text(hero, owned), parse_mode="html", reply_markup=InlineKeyboardMarkup(markup_rows))
+
+
 async def callback_handler(client, callback_query):
     data = callback_query.data or ""
     if data.startswith(("admin:", "wizard:")):
         return
     user_id = callback_query.from_user.id
     await callback_query.answer()
+
+    if data == "char:list":
+        if getattr(callback_query.message, "photo", None):
+            await callback_query.message.delete()
+            await client.send_message(
+                callback_query.message.chat.id,
+                "<b>My characters</b>\n\nChoose a character →",
+                parse_mode="html",
+                reply_markup=_character_list_markup(user_id),
+            )
+        else:
+            await callback_query.message.edit_text(
+                "<b>My characters</b>\n\nChoose a character →",
+                parse_mode="html",
+                reply_markup=_character_list_markup(user_id),
+            )
+        return
+    if data.startswith("char:view:"):
+        hero_key = data.split(":", 2)[2]
+        hero = get_hero(hero_key)
+        owned = get_owned_hero(user_id, hero_key)
+        if not hero:
+            await callback_query.message.reply_text("<b>Character unavailable</b>", parse_mode="html")
+            return
+        card = generate_character_card(hero, owned)
+        rows = []
+        if owned and not owned.get("evolved"):
+            rows.append([InlineKeyboardButton("Attempt evolution →", callback_data=f"char:evolve:{hero_key}")])
+        rows.append([InlineKeyboardButton("My characters", callback_data="char:list")])
+        await callback_query.message.reply_photo(
+            photo=str(card),
+            caption=_character_card_caption(hero, owned),
+            parse_mode="html",
+        )
+        await callback_query.message.reply_text(_character_detail_text(hero, owned), parse_mode="html", reply_markup=InlineKeyboardMarkup(rows))
+        return
+    if data.startswith("char:evolve:"):
+        hero_key = data.split(":", 2)[2]
+        result = evolve_character(user_id, hero_key)
+        if not result["ok"]:
+            await callback_query.message.reply_text(f"<b>Evolution unavailable</b>\n\n{result['reason']}", parse_mode="html")
+            return
+        hero = get_hero(hero_key) or {}
+        owned = result["character"]
+        await callback_query.message.reply_text(
+            f"<b>Evolution complete</b>\n\n{escape(str(hero.get('name', hero_key)))} reached an evolved form.\n"
+            "The character card and battle identity now show the evolution.",
+            parse_mode="html",
+        )
+        await log_event(client, "Character evolution", f"{hero.get('name', hero_key)} evolved", user_id)
+        return
 
     if data.startswith("origin:"):
         key = data.split(":", 1)[1]
@@ -457,14 +673,15 @@ async def callback_handler(client, callback_query):
         return
     if data == "mission:patrol":
         result = claim_patrol(user_id)
-        text = f"<b>Patrol complete</b>\n\n+ {result.get('credits', 0)} Cape Credits\n→ The city keeps moving." if result["ok"] else f"<b>Patrol unavailable</b>\n\n{result['reason']}"
+        text = f"<b>Patrol complete</b>\n\n+ {result.get('credits', 0)} Cape Credits\n+ {result.get('xp', 0)} player XP · Level {result.get('level', 1)}\n→ The city keeps moving." if result["ok"] else f"<b>Patrol unavailable</b>\n\n{result['reason']}"
         await callback_query.message.edit_text(text, parse_mode="html", reply_markup=back_markup())
         return
     if data.startswith("mission:case:"):
         alignment = data.split(":", 2)[2]
         result = complete_case(user_id, alignment)
         text = (
-            f"<b>Case File resolved</b>\n\nChoice → {result['alignment']}\nReward → +{result['credits']} Cape Credits\nAlignment updated →"
+            f"<b>Case File resolved</b>\n\nChoice → {result['alignment']}\nReward → +{result['credits']} Cape Credits\n"
+            f"Player XP → +{result.get('xp', 0)} · Level {result.get('level', 1)}\nAlignment updated →"
             if result["ok"]
             else f"<b>Case File unavailable</b>\n\n{result['reason']}"
         )
@@ -495,10 +712,12 @@ async def callback_handler(client, callback_query):
             "stage": stage,
             "enemy_hp": battle_info["enemy_hp"],
             "enemy_max_hp": battle_info["enemy_hp"],
-            "player_hp": 100,
-            "player_max_hp": 100,
+            "player_hp": battle_info["player_hp"],
+            "player_max_hp": battle_info["player_hp"],
             "turn": 1,
             "actor_name": battle_info["actor_name"],
+            "actor_level": battle_info["actor_level"],
+            "enemy_level": battle_info["enemy_level"],
         }
         await callback_query.message.edit_text(
             _battle_text(battle, battle_info["enemy_name"]),
@@ -508,6 +727,7 @@ async def callback_handler(client, callback_query):
                 mode=mode,
                 move_names=battle_info["move_names"],
                 nemesis_available=battle_info["nemesis_available"],
+                moves=battle_info["moves"],
             ),
         )
         return
@@ -516,9 +736,9 @@ async def callback_handler(client, callback_query):
         if not battle_info["ok"]:
             await callback_query.message.edit_text(f"<b>Arena unavailable</b>\n\n{battle_info['reason']}", parse_mode="html", reply_markup=back_markup())
             return
-        battle = {"stage": "Sanctioned Bout", "enemy_hp": battle_info["enemy_hp"], "enemy_max_hp": battle_info["enemy_hp"], "player_hp": 100, "player_max_hp": 100, "turn": 1}
+        battle = {"stage": "Sanctioned Bout", "enemy_hp": battle_info["enemy_hp"], "enemy_max_hp": battle_info["enemy_hp"], "player_hp": battle_info["player_hp"], "player_max_hp": battle_info["player_hp"], "turn": 1, "actor_level": battle_info["actor_level"], "enemy_level": battle_info["enemy_level"]}
         battle["actor_name"] = battle_info["actor_name"]
-        await callback_query.message.edit_text(_battle_text(battle, battle_info["enemy_name"]), parse_mode="html", reply_markup=_battle_markup(battle_info["id"], mode="arena", move_names=battle_info["move_names"]))
+        await callback_query.message.edit_text(_battle_text(battle, battle_info["enemy_name"]), parse_mode="html", reply_markup=_battle_markup(battle_info["id"], mode="arena", move_names=battle_info["move_names"], moves=battle_info["moves"]))
         return
     if data == "menu:rift":
         profile = get_profile(user_id) or {}
@@ -527,9 +747,9 @@ async def callback_handler(client, callback_query):
         if not battle_info["ok"]:
             await callback_query.message.edit_text(f"<b>The Rift is unavailable</b>\n\n{battle_info['reason']}", parse_mode="html", reply_markup=back_markup())
             return
-        battle = {"stage": f"The Rift · Floor {floor}", "enemy_hp": battle_info["enemy_hp"], "enemy_max_hp": battle_info["enemy_hp"], "player_hp": 100, "player_max_hp": 100, "turn": 1}
+        battle = {"stage": f"The Rift · Floor {floor}", "enemy_hp": battle_info["enemy_hp"], "enemy_max_hp": battle_info["enemy_hp"], "player_hp": battle_info["player_hp"], "player_max_hp": battle_info["player_hp"], "turn": 1, "actor_level": battle_info["actor_level"], "enemy_level": battle_info["enemy_level"]}
         battle["actor_name"] = battle_info["actor_name"]
-        await callback_query.message.edit_text(_battle_text(battle, battle_info["enemy_name"]), parse_mode="html", reply_markup=_battle_markup(battle_info["id"], mode="rift", move_names=battle_info["move_names"], nemesis_available=battle_info["nemesis_available"]))
+        await callback_query.message.edit_text(_battle_text(battle, battle_info["enemy_name"]), parse_mode="html", reply_markup=_battle_markup(battle_info["id"], mode="rift", move_names=battle_info["move_names"], nemesis_available=battle_info["nemesis_available"], moves=battle_info["moves"]))
         return
     if data == "menu:events":
         events = available_events()
@@ -555,10 +775,12 @@ async def callback_handler(client, callback_query):
             "stage": "Event Boss",
             "enemy_hp": battle_info["enemy_hp"],
             "enemy_max_hp": battle_info["enemy_hp"],
-            "player_hp": 100,
-            "player_max_hp": 100,
+            "player_hp": battle_info["player_hp"],
+            "player_max_hp": battle_info["player_hp"],
             "turn": 1,
             "actor_name": battle_info["actor_name"],
+            "actor_level": battle_info["actor_level"],
+            "enemy_level": battle_info["enemy_level"],
         }
         await callback_query.message.edit_text(
             _battle_text(battle, battle_info["enemy_name"]),
@@ -568,6 +790,7 @@ async def callback_handler(client, callback_query):
                 mode="event",
                 move_names=battle_info["move_names"],
                 nemesis_available=battle_info["nemesis_available"],
+                moves=battle_info["moves"],
             ),
         )
         return
@@ -588,6 +811,8 @@ async def callback_handler(client, callback_query):
                 battle["mode"],
                 battle.get("move_names", {}),
                 bool(battle.get("nemesis_available")),
+                battle.get("moves", []),
+                battle.get("cooldowns", {}),
             ),
         )
         if finished:
@@ -599,4 +824,5 @@ def register(client) -> None:
     client.add_handler(MessageHandler(guide_command, filters.command("guide")))
     client.add_handler(MessageHandler(menu_command, filters.command(["main", "menu", "help"])))
     client.add_handler(MessageHandler(profile_command, filters.command("profile")))
+    client.add_handler(MessageHandler(char_command, filters.command("char")))
     client.add_handler(CallbackQueryHandler(callback_handler))

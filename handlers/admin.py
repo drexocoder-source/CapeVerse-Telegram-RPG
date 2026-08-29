@@ -7,18 +7,26 @@ from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 from database.mongo import (
     add_submission,
+    get_hero,
+    get_team,
+    list_owned_heroes,
     list_moderators,
+    list_heroes,
     list_submissions,
     publish_content,
     publish_event,
     publish_villain,
     review_submission,
+    search_players,
     seed_hero,
+    update_hero,
     upsert_moderator,
 )
-from handlers.content_wizard import register as register_content_wizard
+from handlers.content_wizard import _apply_move_compatibility, parse_move_lines, register as register_content_wizard
 from plugins.battle import simulate_pve
 from utils.audit import log_event
+from utils.formatting import profile_text
+from utils.profile_card import generate_profile_card
 
 
 OWNER_ID = int(os.getenv("OWNER_TELEGRAM_ID", "0") or 0)
@@ -37,6 +45,7 @@ PERMISSIONS = [
 pending_mod_targets: dict[int, int] = {}
 pending_mod_permissions: dict[int, set[str]] = {}
 pending_mod_names: dict[int, str] = {}
+pending_character_edits: dict[int, dict[str, str]] = {}
 
 
 def is_owner(user_id: int) -> bool:
@@ -95,6 +104,23 @@ def pending_markup(items: list[dict[str, Any]]) -> InlineKeyboardMarkup:
         )
     rows.append([InlineKeyboardButton("← Owner panel", callback_data="admin:home")])
     return InlineKeyboardMarkup(rows)
+
+
+def character_edit_markup() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("Story", callback_data="admin:editfield:description"),
+            InlineKeyboardButton("Place", callback_data="admin:editfield:place"),
+        ],
+        [
+            InlineKeyboardButton("Character type", callback_data="admin:editfield:origin_type"),
+            InlineKeyboardButton("Codename", callback_data="admin:editfield:codename"),
+        ],
+        [InlineKeyboardButton("Normal moves", callback_data="admin:editfield:normal")],
+        [InlineKeyboardButton("Defense moves", callback_data="admin:editfield:defense")],
+        [InlineKeyboardButton("Special moves", callback_data="admin:editfield:special")],
+        [InlineKeyboardButton("← Owner panel", callback_data="admin:home")],
+    ])
 
 
 def _target_from_message(message) -> int | None:
@@ -219,9 +245,13 @@ async def adminhelp_command(client, message):
         "/submitvillain → guided enemy or villain creation\n"
         "/submitevent → create a boss event\n"
         "/test → simulate PvE damage without rewards\n"
+        "/editchar CHARACTER_KEY → edit story, identity, or move categories\n"
+        "/playersearch NAME_OR_ID → view a player progression card\n"
         "/cancel → cancel an active creation wizard\n"
         "/submitkind → submit a new content kind\n\n"
-        "Hero moves include separate Signature, Utility, and Ultimate damage values.\n"
+        "Moves are grouped into Normal, Defense, and Special lists.\n"
+        "Each move stores name, description, damage, unlock level, cooldown, and effect.\n"
+        "The AI option analyzes the story and proposes original balanced move sets.\n"
         "Set StarterOrigin to Enhanced, Tech, Mystic, or None.\n\n"
         "<b>Adding content</b>\n"
         "Draft → submit → rights check → owner approval → publish.\n"
@@ -254,6 +284,97 @@ async def pending_command(client, message):
         f"· <b>{item['title']}</b>  →  {item['content_kind']}  →  {str(item['_id'])[:8]}" for item in items[:12]
     )
     await message.reply_text(text, parse_mode="html", reply_markup=pending_markup(items))
+
+
+async def editchar_command(client, message):
+    if not is_owner(message.from_user.id):
+        return
+    parts = (message.text or "").split(maxsplit=1)
+    if len(parts) < 2:
+        await message.reply_text(
+            "<b>Edit published character</b>\n\n"
+            "Use <code>/editchar character_key</code>\n"
+            "You can find keys with <code>/char character name</code>.",
+            parse_mode="html",
+        )
+        return
+    query = parts[1].strip().lower()
+    hero = get_hero(query)
+    if not hero:
+        hero = next(
+            (item for item in list_heroes("all") if query in {str(item.get("name", "")).lower(), str(item.get("codename", "")).lower()}),
+            None,
+        )
+    if not hero:
+        await message.reply_text("<b>Character not found</b>\n\nUse the exact character key or name.", parse_mode="html")
+        return
+    pending_character_edits[message.from_user.id] = {"hero_key": hero["hero_key"]}
+    await message.reply_text(
+        f"<b>Edit character</b>\n\n{hero.get('name')} · <code>{hero['hero_key']}</code>\n"
+        "Choose the part to replace →",
+        parse_mode="html",
+        reply_markup=character_edit_markup(),
+    )
+
+
+async def playersearch_command(client, message):
+    if not can(message.from_user.id, "view_players"):
+        return
+    parts = (message.text or "").split(maxsplit=1)
+    if len(parts) < 2:
+        await message.reply_text(
+            "<b>Player search</b>\n\nUse <code>/playersearch Telegram ID or first name</code>.",
+            parse_mode="html",
+        )
+        return
+    matches = search_players(parts[1])
+    if not matches:
+        await message.reply_text("<b>No player found</b>", parse_mode="html")
+        return
+    profile = matches[0]
+    heroes = list_owned_heroes(profile["telegram_id"])
+    team = get_team(profile["telegram_id"])
+    synergy = min(15, max(0, len({hero.get("universe") for hero in team}) - 1) * 5)
+    card = generate_profile_card(profile, heroes, len(team), synergy)
+    await message.reply_photo(
+        photo=str(card),
+        caption=profile_text(profile, len(heroes), len(team), synergy) + f"\n\nID → <code>{profile['telegram_id']}</code>",
+        parse_mode="html",
+    )
+    await log_event(client, "Player search", f"Viewed player {profile['telegram_id']}", message.from_user.id)
+
+
+async def character_edit_text(client, message):
+    state = pending_character_edits.get(message.from_user.id)
+    if not state or not state.get("field") or (message.text or "").startswith("/"):
+        return
+    hero = get_hero(state["hero_key"])
+    if not hero:
+        pending_character_edits.pop(message.from_user.id, None)
+        return
+    field = state["field"]
+    value = (message.text or "").strip()
+    if field in {"normal", "defense", "special"}:
+        try:
+            moves = parse_move_lines(value, field)
+        except ValueError as exc:
+            await message.reply_text(f"<b>Invalid move list</b>\n\n{exc}", parse_mode="html")
+            return
+        move_sets = dict(hero.get("move_sets") or {})
+        move_sets[field] = moves
+        compatibility = {"move_sets": move_sets}
+        _apply_move_compatibility(compatibility)
+        updated = update_hero(hero["hero_key"], compatibility)
+    else:
+        updated = update_hero(hero["hero_key"], {field: value[:1000]})
+    state.pop("field", None)
+    await message.reply_text(
+        f"<b>Character updated</b>\n\n{updated.get('name') if updated else hero.get('name')}\n"
+        f"Changed → {field}\n\nChoose another field or return to the owner panel.",
+        parse_mode="html",
+        reply_markup=character_edit_markup(),
+    )
+    await log_event(client, "Character edited", f"{hero.get('name')} → {field}", message.from_user.id)
 
 
 async def test_command(client, message):
@@ -293,6 +414,25 @@ async def admin_callback(client, callback_query):
         mods = list_moderators()
         text = "<b>Moderators</b>\n\n" + ("\n".join(f"· {mod.get('first_name') or 'Moderator'} · <code>{mod['telegram_id']}</code>\n  {', '.join(mod.get('permissions', [])) or 'no permissions'}" for mod in mods) if mods else "No moderators yet.")
         await callback_query.message.edit_text(text, parse_mode="html", reply_markup=owner_panel_markup())
+    elif action[1] == "editfield":
+        state = pending_character_edits.get(callback_query.from_user.id)
+        if not state:
+            await callback_query.message.edit_text(
+                "<b>No character selected</b>\n\nUse /editchar CHARACTER_KEY first.",
+                parse_mode="html",
+                reply_markup=owner_panel_markup(),
+            )
+            return
+        field = action[2]
+        state["field"] = field
+        if field in {"normal", "defense", "special"}:
+            prompt = (
+                f"Send the replacement {field} move list, one move per line:\n\n"
+                "Name | Description | Damage | Unlock level | Cooldown | Effect"
+            )
+        else:
+            prompt = f"Send the new {field.replace('_', ' ')}."
+        await callback_query.message.reply_text(f"<b>Edit {field.replace('_', ' ')}</b>\n\n{prompt}", parse_mode="html")
     elif action[1] == "perm":
         target_id = int(action[2])
         permission = action[3]
@@ -398,5 +538,8 @@ def register(client) -> None:
     client.add_handler(MessageHandler(guideadmin_command, filters.command("guideadmin")))
     client.add_handler(MessageHandler(pending_command, filters.command("pending")))
     client.add_handler(MessageHandler(test_command, filters.command("test")))
+    client.add_handler(MessageHandler(editchar_command, filters.command(["editchar", "edit_char"])))
+    client.add_handler(MessageHandler(playersearch_command, filters.command("playersearch")))
     client.add_handler(CallbackQueryHandler(admin_callback, filters.regex(r"^admin:")))
     register_content_wizard(client)
+    client.add_handler(MessageHandler(character_edit_text, filters.private & filters.text), group=2)

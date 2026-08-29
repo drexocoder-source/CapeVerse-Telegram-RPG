@@ -1,4 +1,5 @@
 import os
+import re
 from datetime import datetime, timezone
 from typing import Any
 
@@ -230,12 +231,23 @@ def update_hero(hero_key: str, fields: dict[str, Any]) -> dict[str, Any] | None:
     allowed = {
         "name", "codename", "origin_type", "universe", "place", "faction",
         "description", "image_url", "role", "rarity", "alignment", "move_sets",
+        "ability_signature", "signature_damage", "ability_utility",
+        "utility_damage", "ability_ultimate", "ultimate_damage",
     }
     clean = {key: value for key, value in fields.items() if key in allowed}
     if clean:
         clean["updated_at"] = now()
         collection("heroes").update_one({"hero_key": hero_key}, {"$set": clean})
     return collection("heroes").find_one({"hero_key": hero_key})
+
+
+def search_players(query: str, limit: int = 10) -> list[dict[str, Any]]:
+    value = query.strip()
+    if value.lstrip("-").isdigit():
+        player = collection("users").find_one({"telegram_id": int(value)})
+        return [player] if player else []
+    regex = {"$regex": re.escape(value[:80]), "$options": "i"}
+    return list(collection("users").find({"$or": [{"first_name": regex}, {"username": regex}]}).limit(limit))
 
 
 def save_team(telegram_id: int, owned_ids: list[str], team_number: int = 1) -> None:
@@ -314,7 +326,10 @@ def get_battle(telegram_id: int, battle_id: str) -> dict[str, Any] | None:
 def update_battle(battle_id: str, **fields: Any) -> dict[str, Any] | None:
     from bson import ObjectId
 
-    clean = {key: value for key, value in fields.items() if key in {"status", "turn", "player_hp", "enemy_hp", "log"}}
+    clean = {
+        key: value for key, value in fields.items()
+        if key in {"status", "turn", "player_hp", "enemy_hp", "log", "cooldowns"}
+    }
     clean["updated_at"] = now()
     try:
         collection("battles").update_one({"_id": ObjectId(battle_id)}, {"$set": clean})

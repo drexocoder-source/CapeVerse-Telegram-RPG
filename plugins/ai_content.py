@@ -55,8 +55,8 @@ def _normalise_moves(value: Any, category: str) -> list[dict[str, Any]]:
 
 
 def generate_character_blueprint(description: str, kind: str = "hero") -> dict[str, Any] | None:
-    base_url = os.getenv("AI_INTEGRATIONS_OPENAI_BASE_URL", "").strip()
-    api_key = os.getenv("AI_INTEGRATIONS_OPENAI_API_KEY", "").strip()
+    base_url = os.getenv("OPENROUTER_BASE_URL", "").strip()
+    api_key = os.getenv("OPENROUTER_API_KEY", "").strip()
     if not base_url or not api_key or not description.strip():
         return None
     subject = "hero" if kind == "hero" else "villain or enemy"
@@ -76,7 +76,7 @@ def generate_character_blueprint(description: str, kind: str = "hero") -> dict[s
         "Keep unlock levels meaningful: first move level 1, later moves level 4, 8, or 12."
     )
     body = json.dumps({
-        "model": "gpt-5.6-terra",
+        "model": "openrouter/free",
         "max_completion_tokens": 4096,
         "messages": [
             {"role": "system", "content": system},
