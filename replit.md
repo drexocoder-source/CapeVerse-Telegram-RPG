@@ -5,6 +5,9 @@
 - The active feature set is Version 0.8.
 - Version 2 is a future roadmap only; see `VERSION_2_ROADMAP.md`.
 - Original CapeVerse characters may evolve. Licensed suits and documented forms use Research Archives instead of evolution.
+- Inline callback navigation should edit the current text/caption instead of sending a new message; downloadable files and direct slash-command results are the exceptions.
+- Arrange compact choices as two buttons per row when labels fit.
+- Normal, Defense, and Special move categories accept one or more moves; AI chooses different counts naturally instead of forcing three.
 
 CapeVerse is a Kurigram-powered Telegram superhero collection RPG with MongoDB persistence, clean symbol-led messaging, a generated player guide, and bot-based owner controls.
 

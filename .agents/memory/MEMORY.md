@@ -1,0 +1,1 @@
+- [Telegram startup](telegram-startup.md) — keep command-menu registration asynchronous after Kurigram connects so slow Telegram handshakes do not block bot readiness.

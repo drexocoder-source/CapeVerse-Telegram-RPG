@@ -28,7 +28,7 @@ def _normalise_moves(value: Any, category: str) -> list[dict[str, Any]]:
     if not isinstance(value, list):
         return []
     moves: list[dict[str, Any]] = []
-    for item in value[:3]:
+    for item in value:
         if not isinstance(item, dict) or not item.get("name"):
             continue
         try:
@@ -68,7 +68,8 @@ def generate_character_blueprint(
         "must remain original. Make every character mechanically distinctive and make "
         "the moves reflect the story, role, personality, weaknesses, location, and requested "
         "combat style. Create three move categories: normal, defense, special. "
-        "Each category may contain 1, 2, or 3 moves; do not force every category to have three. "
+        "Each category must contain one or more moves. The count may be 1, 2, 3, or more; "
+        "choose the count naturally for the character and do not force every category to have the same size. "
         "Every move needs name, description, "
         "damage, unlock_level, cooldown, and effect. Defense moves may use damage 0. "
         "For CapeVerse-original characters, suggest original evolution concepts. For licensed "

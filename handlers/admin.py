@@ -493,27 +493,16 @@ async def admin_callback(client, callback_query):
         submission_id = action[2]
         item = next((entry for entry in list_submissions("pending") if str(entry["_id"]) == submission_id), None)
         if not item:
-            await callback_query.message.reply_text("<b>Submission unavailable</b>", parse_mode="html")
+            await callback_query.message.edit_text("<b>Submission unavailable</b>", parse_mode="html")
             return
         payload = item.get("payload", {})
         image_url = payload.get("image_url")
-        if image_url:
-            try:
-                await callback_query.message.reply_photo(
-                    photo=image_url,
-                    caption=(
-                        f"<b>{escape(str(item.get('title', 'Submission')))}</b>\n"
-                        f"{escape(str(payload.get('codename', payload.get('enemy_type', ''))))}\n"
-                        "Full approval dossier follows."
-                    ),
-                    parse_mode="html",
-                )
-            except Exception:
-                pass
-        await callback_query.message.reply_text(
-            submission_detail_text(item),
+        photo_line = f"\nStored photo → {escape(str(image_url))}" if image_url else "\nStored photo → not provided"
+        await callback_query.message.edit_text(
+            submission_detail_text(item) + photo_line,
             parse_mode="html",
             reply_markup=review_markup(submission_id),
+            disable_web_page_preview=False,
         )
     elif action[1] == "perm":
         target_id = int(action[2])

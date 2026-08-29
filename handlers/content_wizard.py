@@ -53,9 +53,9 @@ HERO_STEPS = [
     {"field": "description", "title": "Story", "prompt": "Write a detailed original description. The AI can analyze it to create balanced moves."},
     {"field": "move_direction", "title": "Move direction", "prompt": "Describe how the moves should look and feel: fighting style, power limits, personality, visual effects, tactics, and anything the AI must avoid."},
     {"field": "ai_assist", "title": "Move creation", "options": OPTIONS["ai_assist"]},
-    {"field": "normal_moves", "title": "Normal moves", "conditional": "manual_moves", "prompt": "Send 1–3 normal moves, one per line:\nName | Description | Damage | Unlock level | Cooldown | Effect\n\nExample:\nPulse Jab | Fast energy strike | 18 | 1 | 0 | none"},
-    {"field": "defense_moves", "title": "Defense moves", "conditional": "manual_moves", "prompt": "Send 1–3 defense moves, one per line:\nName | Description | Damage | Unlock level | Cooldown | Effect\n\nDamage may be 0. Example effect → shield 35%."},
-    {"field": "special_moves", "title": "Special moves", "conditional": "manual_moves", "prompt": "Send 1–3 special moves, one per line:\nName | Description | Damage | Unlock level | Cooldown | Effect\n\nUse higher unlock levels for stronger moves."},
+    {"field": "normal_moves", "title": "Normal moves", "conditional": "manual_moves", "prompt": "Send one or more normal moves, one per line:\nName | Description | Damage | Unlock level | Cooldown | Effect\n\nExample:\nPulse Jab | Fast energy strike | 18 | 1 | 0 | none"},
+    {"field": "defense_moves", "title": "Defense moves", "conditional": "manual_moves", "prompt": "Send one or more defense moves, one per line:\nName | Description | Damage | Unlock level | Cooldown | Effect\n\nDamage may be 0. Example effect → shield 35%."},
+    {"field": "special_moves", "title": "Special moves", "conditional": "manual_moves", "prompt": "Send one or more special moves, one per line:\nName | Description | Damage | Unlock level | Cooldown | Effect\n\nUse higher unlock levels for stronger moves."},
     {"field": "starter", "title": "Add as starter?", "options": OPTIONS["starter"]},
     {"field": "starter_origin", "title": "Starter Origin", "options": OPTIONS["starter_origin"], "conditional": "starter_yes"},
 ]
@@ -79,9 +79,9 @@ VILLAIN_STEPS = [
     {"field": "attack", "title": "Attack", "conditional": "manual_stats", "prompt": "Enter base attack from 1 to 500.", "number": (1, 500)},
     {"field": "min_level", "title": "Minimum player level", "conditional": "manual_stats", "prompt": "At which player level may this enemy begin appearing? Use 1–50.", "number": (1, 50)},
     {"field": "max_level", "title": "Maximum player level", "conditional": "manual_stats", "prompt": "Up to which player level may this enemy appear? Use 1–100.", "number": (1, 100)},
-    {"field": "normal_moves", "title": "Normal moves", "conditional": "manual_moves", "prompt": "Send 1–3 normal moves, one per line:\nName | Description | Damage | Unlock level | Cooldown | Effect"},
-    {"field": "defense_moves", "title": "Defense moves", "conditional": "manual_moves", "prompt": "Send 1–3 defense moves, one per line:\nName | Description | Damage | Unlock level | Cooldown | Effect"},
-    {"field": "special_moves", "title": "Special moves", "conditional": "manual_moves", "prompt": "Send 1–3 special moves, one per line:\nName | Description | Damage | Unlock level | Cooldown | Effect"},
+    {"field": "normal_moves", "title": "Normal moves", "conditional": "manual_moves", "prompt": "Send one or more normal moves, one per line:\nName | Description | Damage | Unlock level | Cooldown | Effect"},
+    {"field": "defense_moves", "title": "Defense moves", "conditional": "manual_moves", "prompt": "Send one or more defense moves, one per line:\nName | Description | Damage | Unlock level | Cooldown | Effect"},
+    {"field": "special_moves", "title": "Special moves", "conditional": "manual_moves", "prompt": "Send one or more special moves, one per line:\nName | Description | Damage | Unlock level | Cooldown | Effect"},
     {"field": "nemesis_hero_key", "title": "Nemesis hero", "prompt": "Send the linked hero key, or send None."},
 ]
 
@@ -175,8 +175,8 @@ def parse_move_lines(value: str, category: str) -> list[dict[str, Any]]:
             "effect": (parts[5] if len(parts) > 5 else "none")[:200],
             "category": category,
         })
-    if not 1 <= len(moves) <= 3:
-        raise ValueError("Send between 1 and 3 moves in this section.")
+    if len(moves) < 1:
+        raise ValueError("Send at least one move in this section.")
     return moves
 
 

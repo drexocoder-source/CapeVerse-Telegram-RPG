@@ -1,5 +1,6 @@
 from html import escape
 from pathlib import Path
+import re
 
 from pyrogram import filters
 from pyrogram.handlers import CallbackQueryHandler, MessageHandler
@@ -352,15 +353,15 @@ def _find_character(query: str, telegram_id: int) -> tuple[dict | None, dict | N
 
 def _character_list_markup(telegram_id: int) -> InlineKeyboardMarkup:
     heroes = list_owned_heroes(telegram_id)[:12]
-    rows = [
-        [
+    rows = []
+    for index in range(0, len(heroes), 2):
+        rows.append([
             InlineKeyboardButton(
-                f"{hero.get('name', 'Hero')} · Lv {hero.get('level', 1)}",
+                f"{hero.get('name', 'Hero')[:18]} · Lv {hero.get('level', 1)}",
                 callback_data=f"mychar:view:{hero['hero_key']}",
             )
-        ]
-        for hero in heroes
-    ]
+            for hero in heroes[index:index + 2]
+        ])
     rows.append([InlineKeyboardButton("← Main menu", callback_data="menu:home")])
     return InlineKeyboardMarkup(rows)
 
@@ -615,7 +616,8 @@ async def _claim_reward_message(message, telegram_id: int, period: str, edit: bo
 
 async def _edit_callback(message, text: str, markup: InlineKeyboardMarkup | None = None) -> None:
     if getattr(message, "photo", None):
-        await message.edit_caption(caption=text[:1024], parse_mode="html", reply_markup=markup)
+        plain = re.sub(r"<[^>]+>", "", text)
+        await message.edit_caption(caption=plain[:1000], reply_markup=markup)
     else:
         await message.edit_text(text, parse_mode="html", reply_markup=markup)
 
