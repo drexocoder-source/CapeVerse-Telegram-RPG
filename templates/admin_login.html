@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Owner access · CapeVerse</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='capeverse.css') }}">
+  </head>
+  <body class="admin-body">
+    <main class="login-shell">
+      <p class="eyebrow">CAPEVERSE CONTROL</p>
+      <h1>Owner access</h1>
+      <p class="muted">Content approval, moderator permissions, and game configuration.</p>
+      {% with messages = get_flashed_messages(with_categories=true) %}
+        {% for category, message in messages %}<p class="flash {{ category }}">{{ message }}</p>{% endfor %}
+      {% endwith %}
+      {% if not password_configured %}<p class="flash error">ADMIN_PANEL_PASSWORD is not configured.</p>{% endif %}
+      <form method="post" class="stack">
+        <label for="password">Owner password</label>
+        <input id="password" name="password" type="password" autocomplete="current-password" required>
+        <button type="submit">Continue →</button>
+      </form>
+      <a class="text-link" href="/">← Return to CapeVerse</a>
+    </main>
+  </body>
+</html>

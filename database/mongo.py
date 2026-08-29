@@ -1,4 +1,3 @@
-import json
 import os
 from datetime import datetime, timezone
 from typing import Any
@@ -23,7 +22,10 @@ def get_db() -> Database:
         raise RuntimeError("MONGODB_URI is not configured")
     if _client is None:
         _client = MongoClient(MONGODB_URI, serverSelectionTimeoutMS=4000)
-    database_name = MongoClient(MONGODB_URI).get_default_database().name if "/" in MONGODB_URI.rsplit("/", 1)[-1] else MONGODB_DATABASE
+    try:
+        database_name = _client.get_default_database().name
+    except Exception:
+        database_name = MONGODB_DATABASE
     return _client[database_name or MONGODB_DATABASE]
 
 

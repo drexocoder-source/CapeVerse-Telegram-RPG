@@ -1,6 +1,7 @@
 from pathlib import Path
 
 from pyrogram import filters
+from pyrogram.handlers import CallbackQueryHandler, MessageHandler
 from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 from database.mongo import (
@@ -72,10 +73,11 @@ def _battle_text(battle: dict, enemy_name: str) -> str:
     )
 
 
-async def show_profile(message, edit: bool = False) -> None:
-    profile = get_profile(message.from_user.id) or {}
-    heroes = list_owned_heroes(message.from_user.id)
-    team = get_team(message.from_user.id)
+async def show_profile(message, edit: bool = False, telegram_id: int | None = None) -> None:
+    player_id = telegram_id or message.from_user.id
+    profile = get_profile(player_id) or {}
+    heroes = list_owned_heroes(player_id)
+    team = get_team(player_id)
     synergy = min(15, max(0, len({hero.get("universe") for hero in team}) - 1) * 5)
     text = profile_text(profile, len(heroes), len(team), synergy)
     if edit:
@@ -130,6 +132,8 @@ async def profile_command(client, message):
 
 async def callback_handler(client, callback_query):
     data = callback_query.data or ""
+    if data.startswith("admin:"):
+        return
     user_id = callback_query.from_user.id
     await callback_query.answer()
 
@@ -166,7 +170,7 @@ async def callback_handler(client, callback_query):
         )
         return
     if data == "menu:profile":
-        await show_profile(callback_query.message, edit=True)
+        await show_profile(callback_query.message, edit=True, telegram_id=user_id)
         return
     if data == "menu:guide":
         await send_guide(callback_query.message)
@@ -270,8 +274,8 @@ async def callback_handler(client, callback_query):
 
 
 def register(client) -> None:
-    client.add_handler(__import__("pyrogram").handlers.MessageHandler(start_command, filters.command("start")))
-    client.add_handler(__import__("pyrogram").handlers.MessageHandler(guide_command, filters.command("guide")))
-    client.add_handler(__import__("pyrogram").handlers.MessageHandler(menu_command, filters.command(["menu", "help"])))
-    client.add_handler(__import__("pyrogram").handlers.MessageHandler(profile_command, filters.command("profile")))
-    client.add_handler(__import__("pyrogram").handlers.CallbackQueryHandler(callback_handler))
+    client.add_handler(MessageHandler(start_command, filters.command("start")))
+    client.add_handler(MessageHandler(guide_command, filters.command("guide")))
+    client.add_handler(MessageHandler(menu_command, filters.command(["menu", "help"])))
+    client.add_handler(MessageHandler(profile_command, filters.command("profile")))
+    client.add_handler(CallbackQueryHandler(callback_handler))

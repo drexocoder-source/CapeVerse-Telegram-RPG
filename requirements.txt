@@ -2,6 +2,8 @@ Flask>=3.1.0
 Kurigram>=2.2.25
 reportlab>=4.2.0
 gunicorn>=23.0.0
+pymongo>=4.10.0
+Pillow>=11.0.0
 flask
 gunicorn
 kurigram
