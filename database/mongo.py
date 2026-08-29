@@ -86,6 +86,8 @@ def get_or_create_user_with_status(telegram_id: int, username: str = "", first_n
                 "rift_floor": 1,
                 "signal_boost": 0,
                 "guide_sent": False,
+                "xp": 0,
+                "level": 1,
                 "created_at": now(),
             },
         },
@@ -111,6 +113,8 @@ def update_player(telegram_id: int, **fields: Any) -> dict[str, Any] | None:
         "rift_floor",
         "signal_boost",
         "guide_sent",
+        "xp",
+        "level",
     }
     clean = {key: value for key, value in fields.items() if key in allowed}
     if clean:
@@ -169,6 +173,69 @@ def add_hero_to_player(telegram_id: int, hero_key: str) -> dict[str, Any] | None
         upsert=True,
     )
     return owned.find_one({"telegram_id": telegram_id, "hero_key": hero_key})
+
+
+def xp_to_next(level: int) -> int:
+    return max(100, int(level) * 100)
+
+
+def grant_user_xp(telegram_id: int, amount: int) -> dict[str, Any] | None:
+    profile = get_profile(telegram_id) or {}
+    xp = int(profile.get("xp", 0)) + max(0, int(amount))
+    level = max(1, int(profile.get("level", 1)))
+    while xp >= xp_to_next(level):
+        xp -= xp_to_next(level)
+        level += 1
+    return update_player(telegram_id, xp=xp, level=level)
+
+
+def grant_character_xp(telegram_id: int, hero_key: str, amount: int) -> dict[str, Any] | None:
+    owned = collection("owned_heroes").find_one({"telegram_id": telegram_id, "hero_key": hero_key})
+    if not owned:
+        return None
+    xp = int(owned.get("xp", 0)) + max(0, int(amount))
+    level = max(1, int(owned.get("level", 1)))
+    while xp >= xp_to_next(level):
+        xp -= xp_to_next(level)
+        level += 1
+    collection("owned_heroes").update_one(
+        {"telegram_id": telegram_id, "hero_key": hero_key},
+        {"$set": {"xp": xp, "level": level, "updated_at": now()}},
+    )
+    return collection("owned_heroes").find_one({"telegram_id": telegram_id, "hero_key": hero_key})
+
+
+def get_owned_hero(telegram_id: int, hero_key: str) -> dict[str, Any] | None:
+    return collection("owned_heroes").find_one({"telegram_id": telegram_id, "hero_key": hero_key})
+
+
+def evolve_character(telegram_id: int, hero_key: str) -> dict[str, Any]:
+    owned = get_owned_hero(telegram_id, hero_key)
+    if not owned:
+        return {"ok": False, "reason": "You do not own this hero."}
+    if owned.get("evolved"):
+        return {"ok": False, "reason": "This character has already evolved."}
+    if int(owned.get("level", 1)) < 10:
+        return {"ok": False, "reason": "Reach character level 10 first."}
+    if int(owned.get("stars", 0)) < 3:
+        return {"ok": False, "reason": "Collect 3 duplicate signals for evolution."}
+    collection("owned_heroes").update_one(
+        {"telegram_id": telegram_id, "hero_key": hero_key},
+        {"$set": {"evolved": True, "updated_at": now()}},
+    )
+    return {"ok": True, "character": collection("owned_heroes").find_one({"telegram_id": telegram_id, "hero_key": hero_key})}
+
+
+def update_hero(hero_key: str, fields: dict[str, Any]) -> dict[str, Any] | None:
+    allowed = {
+        "name", "codename", "origin_type", "universe", "place", "faction",
+        "description", "image_url", "role", "rarity", "alignment", "move_sets",
+    }
+    clean = {key: value for key, value in fields.items() if key in allowed}
+    if clean:
+        clean["updated_at"] = now()
+        collection("heroes").update_one({"hero_key": hero_key}, {"$set": clean})
+    return collection("heroes").find_one({"hero_key": hero_key})
 
 
 def save_team(telegram_id: int, owned_ids: list[str], team_number: int = 1) -> None:
@@ -402,10 +469,15 @@ def publish_villain(data: dict[str, Any]) -> None:
     )
 
 
-def list_villains(enemy_type: str | None = None) -> list[dict[str, Any]]:
+def list_villains(enemy_type: str | None = None, player_level: int | None = None) -> list[dict[str, Any]]:
     query: dict[str, Any] = {"status": "published"}
     if enemy_type:
         query["enemy_type"] = enemy_type
+    if player_level is not None:
+        query["$and"] = [
+            {"$or": [{"min_level": {"$lte": player_level}}, {"min_level": {"$exists": False}}]},
+            {"$or": [{"max_level": {"$gte": player_level}}, {"max_level": {"$exists": False}}]},
+        ]
     return list(collection("villains").find(query).sort("name", ASCENDING))
 
 
