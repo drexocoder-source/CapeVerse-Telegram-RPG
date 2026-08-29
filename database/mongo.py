@@ -43,7 +43,11 @@ def init_db() -> None:
     database.battles.create_index([("telegram_id", ASCENDING), ("status", ASCENDING)])
     database.content_submissions.create_index([("status", ASCENDING), ("created_at", DESCENDING)])
     database.moderators.create_index([("telegram_id", ASCENDING)], unique=True)
-    seed_content()
+    database.villains.create_index([("villain_key", ASCENDING)], unique=True)
+    database.villains.create_index([("enemy_type", ASCENDING), ("status", ASCENDING)])
+    database.events.create_index([("event_key", ASCENDING)], unique=True)
+    database.events.create_index([("status", ASCENDING)])
+    remove_default_seed_content()
 
 
 def get_or_create_user(telegram_id: int, username: str = "", first_name: str = "") -> dict[str, Any]:
@@ -123,6 +127,16 @@ def get_hero(hero_key: str) -> dict[str, Any] | None:
     return collection("heroes").find_one({"hero_key": hero_key})
 
 
+def get_starter_hero(origin: str) -> dict[str, Any] | None:
+    return collection("heroes").find_one(
+        {
+            "status": "published",
+            "is_starter": True,
+            "starter_origin": {"$regex": f"^{origin}$", "$options": "i"},
+        }
+    )
+
+
 def list_owned_heroes(telegram_id: int) -> list[dict[str, Any]]:
     return list(collection("owned_heroes").find({"telegram_id": telegram_id}).sort([("stars", DESCENDING), ("level", DESCENDING), ("name", ASCENDING)]))
 
@@ -194,20 +208,28 @@ def record_ledger(telegram_id: int, currency: str, amount: int, reason: str, bal
     )
 
 
-def create_battle(telegram_id: int, mode: str, stage: str, enemy_hp: int = 100) -> str:
+def create_battle(
+    telegram_id: int,
+    mode: str,
+    stage: str,
+    enemy_hp: int = 100,
+    extra: dict[str, Any] | None = None,
+) -> str:
+    payload = {
+        "telegram_id": telegram_id,
+        "mode": mode,
+        "stage": stage,
+        "status": "active",
+        "turn": 1,
+        "player_hp": 100,
+        "enemy_hp": enemy_hp,
+        "log": [],
+        "created_at": now(),
+        "updated_at": now(),
+    }
+    payload.update(extra or {})
     result = collection("battles").insert_one(
-        {
-            "telegram_id": telegram_id,
-            "mode": mode,
-            "stage": stage,
-            "status": "active",
-            "turn": 1,
-            "player_hp": 100,
-            "enemy_hp": enemy_hp,
-            "log": [],
-            "created_at": now(),
-            "updated_at": now(),
-        }
+        payload
     )
     return str(result.inserted_id)
 
@@ -331,59 +353,52 @@ def publish_content(kind: str, title: str, payload: dict[str, Any]) -> None:
     )
 
 
-def seed_content() -> None:
-    heroes = [
+def publish_villain(data: dict[str, Any]) -> None:
+    payload = {
+        **data,
+        "hp": int(data.get("hp", 100)),
+        "attack": int(data.get("attack", 12)),
+        "status": "published",
+        "updated_at": now(),
+    }
+    collection("villains").update_one(
+        {"villain_key": payload["villain_key"]},
+        {"$set": payload, "$setOnInsert": {"created_at": now()}},
+        upsert=True,
+    )
+
+
+def list_villains(enemy_type: str | None = None) -> list[dict[str, Any]]:
+    query: dict[str, Any] = {"status": "published"}
+    if enemy_type:
+        query["enemy_type"] = enemy_type
+    return list(collection("villains").find(query).sort("name", ASCENDING))
+
+
+def get_villain(villain_key: str) -> dict[str, Any] | None:
+    return collection("villains").find_one({"villain_key": villain_key, "status": "published"})
+
+
+def publish_event(data: dict[str, Any]) -> None:
+    collection("events").update_one(
+        {"event_key": data["event_key"]},
         {
-            "hero_key": "volt_warden",
-            "name": "Volt Warden",
-            "codename": "The Living Circuit",
-            "source": "Capeverse Original",
-            "rights_status": "approved",
-            "universe": "Capeverse Originals",
-            "faction": "Independent",
-            "role": "Controller",
-            "rarity": "Epic",
-            "alignment": "Hero",
-            "description": "A city-grid guardian who turns broken signals into protective force.",
-            "ability_signature": "Arc Mark → shocks one enemy and lowers speed.",
-            "ability_utility": "Grid Step → shields the weakest ally.",
-            "ability_ultimate": "Overload Protocol → damages all enemies and stuns the leader.",
-            "status": "published",
+            "$set": {**data, "status": "published", "updated_at": now()},
+            "$setOnInsert": {"created_at": now()},
         },
-        {
-            "hero_key": "ash_oracle",
-            "name": "Ash Oracle",
-            "codename": "Keeper of the Last Ember",
-            "source": "Original Indian-Inspired",
-            "rights_status": "approved",
-            "universe": "Bhoomi-1",
-            "faction": "Hollow Choir",
-            "role": "Support",
-            "rarity": "Rare",
-            "alignment": "Vigilante",
-            "description": "A memory-reader who protects a neighborhood with firelight and foresight.",
-            "ability_signature": "Cinder Thread → heals one ally over two turns.",
-            "ability_utility": "Read the Smoke → reveals the next enemy action.",
-            "ability_ultimate": "Ember Reversal → restores team health and clears one debuff.",
-            "status": "published",
-        },
-        {
-            "hero_key": "ironbark_sentinel",
-            "name": "Ironbark Sentinel",
-            "codename": "The Rooted Shield",
-            "source": "Capeverse Original",
-            "rights_status": "approved",
-            "universe": "Earth-Prime",
-            "faction": "Independent",
-            "role": "Defender",
-            "rarity": "Rare",
-            "alignment": "Hero",
-            "description": "A patient protector whose living armor grows stronger under pressure.",
-            "ability_signature": "Rootline → taunts an enemy and gains guard.",
-            "ability_utility": "Bastion Pulse → grants armor to the team.",
-            "ability_ultimate": "Old Growth → restores guard and counters the next hit.",
-            "status": "published",
-        },
-    ]
-    for hero in heroes:
-        seed_hero(hero)
+        upsert=True,
+    )
+
+
+def list_events() -> list[dict[str, Any]]:
+    return list(collection("events").find({"status": "published"}).sort("created_at", DESCENDING))
+
+
+def remove_default_seed_content() -> None:
+    default_keys = ["volt_warden", "ash_oracle", "ironbark_sentinel"]
+    owned = list(collection("owned_heroes").find({"hero_key": {"$in": default_keys}}, {"_id": 1}))
+    owned_ids = [str(item["_id"]) for item in owned]
+    collection("heroes").delete_many({"hero_key": {"$in": default_keys}})
+    collection("owned_heroes").delete_many({"hero_key": {"$in": default_keys}})
+    if owned_ids:
+        collection("teams").update_many({}, {"$pull": {"members": {"$in": owned_ids}}})

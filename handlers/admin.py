@@ -12,6 +12,8 @@ from database.mongo import (
     list_moderators,
     list_submissions,
     publish_content,
+    publish_event,
+    publish_villain,
     review_submission,
     seed_hero,
     upsert_moderator,
@@ -60,6 +62,10 @@ def owner_panel_markup() -> InlineKeyboardMarkup:
             ],
             [
                 InlineKeyboardButton("Add hero guide", callback_data="admin:hero_guide"),
+                InlineKeyboardButton("Add enemy guide", callback_data="admin:enemy_guide"),
+            ],
+            [
+                InlineKeyboardButton("Add event guide", callback_data="admin:event_guide"),
                 InlineKeyboardButton("Add kind", callback_data="admin:kind_guide"),
             ],
             [InlineKeyboardButton("AI art rights guide", callback_data="admin:art_guide")],
@@ -144,19 +150,35 @@ async def submithero_command(client, message):
     if len(raw) < 2:
         await message.reply_text(
             "<b>Hero submission format</b>\n\n"
-            "/submithero key | Name | Codename | Source | Universe | Faction | Role | Rarity | Alignment | Description | Signature | Utility | Ultimate | RightsStatus\n\n"
+            "/submithero key | Name | Codename | Source | Universe | Faction | Role | Rarity | Alignment | Description | Signature Move | Signature Damage | Utility Move | Utility Damage | Ultimate Move | Ultimate Damage | RightsStatus | StarterOrigin\n\n"
+            "StarterOrigin → Enhanced, Tech, Mystic, or None.\n"
             "Use RightsStatus = approved only when you have rights or the hero is original.\n"
             "The owner must approve every submission before publishing.",
             parse_mode="html",
         )
         return
     fields = [field.strip() for field in raw[1].split("|")]
-    if len(fields) != 14:
-        await message.reply_text("<b>Submission not saved</b>\n\nUse exactly 14 fields separated by |.\nSend /submithero to see the guide again.", parse_mode="html")
+    if len(fields) != 18:
+        await message.reply_text("<b>Submission not saved</b>\n\nUse exactly 18 fields separated by |.\nSend /submithero to see the guide again.", parse_mode="html")
         return
-    keys = ["hero_key", "name", "codename", "source", "universe", "faction", "role", "rarity", "alignment", "description", "ability_signature", "ability_utility", "ability_ultimate", "rights_status"]
+    keys = [
+        "hero_key", "name", "codename", "source", "universe", "faction",
+        "role", "rarity", "alignment", "description",
+        "ability_signature", "signature_damage",
+        "ability_utility", "utility_damage",
+        "ability_ultimate", "ultimate_damage",
+        "rights_status", "starter_origin",
+    ]
     payload = dict(zip(keys, fields))
     payload["hero_key"] = payload["hero_key"].lower().replace(" ", "_")
+    try:
+        payload["signature_damage"] = int(payload["signature_damage"])
+        payload["utility_damage"] = int(payload["utility_damage"])
+        payload["ultimate_damage"] = int(payload["ultimate_damage"])
+    except ValueError:
+        await message.reply_text("<b>Submission not saved</b>\n\nAll three damage values must be whole numbers.", parse_mode="html")
+        return
+    payload["is_starter"] = payload["starter_origin"].lower() in {"enhanced", "tech", "mystic"}
     payload["status"] = "draft"
     submission_id = add_submission("hero", payload["name"], payload, str(user_id))
     await message.reply_text(
@@ -164,6 +186,76 @@ async def submithero_command(client, message):
         parse_mode="html",
     )
     await log_event(client, "New hero", f"Hero submitted → {payload['name']}", user_id)
+
+
+async def submitvillain_command(client, message):
+    user_id = message.from_user.id
+    if not can(user_id, "manage_enemies"):
+        return
+    raw = (message.text or "").split(maxsplit=1)
+    if len(raw) < 2:
+        await message.reply_text(
+            "<b>Enemy and villain submission</b>\n\n"
+            "/submitvillain key | Name | EnemyType | Faction | HP | Attack | Signature | Ultimate | NemesisHeroKey | RightsStatus\n\n"
+            "EnemyType → normal, villain, or event_boss.\n"
+            "NemesisHeroKey → hero key or None.",
+            parse_mode="html",
+        )
+        return
+    fields = [field.strip() for field in raw[1].split("|")]
+    if len(fields) != 10:
+        await message.reply_text("<b>Submission not saved</b>\n\nUse exactly 10 fields separated by |.", parse_mode="html")
+        return
+    keys = ["villain_key", "name", "enemy_type", "faction", "hp", "attack", "ability_signature", "ability_ultimate", "nemesis_hero_key", "rights_status"]
+    payload = dict(zip(keys, fields))
+    payload["villain_key"] = payload["villain_key"].lower().replace(" ", "_")
+    try:
+        payload["hp"] = int(payload["hp"])
+        payload["attack"] = int(payload["attack"])
+    except ValueError:
+        await message.reply_text("<b>Submission not saved</b>\n\nHP and Attack must be whole numbers.", parse_mode="html")
+        return
+    payload["nemesis_for"] = [] if payload["nemesis_hero_key"].lower() == "none" else [payload["nemesis_hero_key"].lower().replace(" ", "_")]
+    payload["status"] = "draft"
+    submission_id = add_submission("villain", payload["name"], payload, str(user_id))
+    await message.reply_text(
+        f"<b>Enemy submitted → pending</b>\n\n{payload['name']}\nType → {payload['enemy_type']}\nSubmission ID → <code>{submission_id}</code>",
+        parse_mode="html",
+    )
+    await log_event(client, "New villain", f"{payload['name']} → {payload['enemy_type']}", user_id)
+
+
+async def submitevent_command(client, message):
+    user_id = message.from_user.id
+    if not can(user_id, "manage_events"):
+        return
+    raw = (message.text or "").split(maxsplit=1)
+    if len(raw) < 2:
+        await message.reply_text(
+            "<b>Event submission</b>\n\n"
+            "/submitevent key | Title | BossKey | Description | RewardCredits\n\n"
+            "The BossKey must belong to a published event_boss or villain.",
+            parse_mode="html",
+        )
+        return
+    fields = [field.strip() for field in raw[1].split("|")]
+    if len(fields) != 5 or not fields[4].isdigit():
+        await message.reply_text("<b>Submission not saved</b>\n\nUse exactly 5 fields and a numeric reward.", parse_mode="html")
+        return
+    payload = {
+        "event_key": fields[0].lower().replace(" ", "_"),
+        "title": fields[1],
+        "boss_key": fields[2].lower().replace(" ", "_"),
+        "description": fields[3],
+        "reward_credits": int(fields[4]),
+        "status": "draft",
+    }
+    submission_id = add_submission("event", payload["title"], payload, str(user_id))
+    await message.reply_text(
+        f"<b>Event submitted → pending</b>\n\n{payload['title']}\nBoss → {payload['boss_key']}\nSubmission ID → <code>{submission_id}</code>",
+        parse_mode="html",
+    )
+    await log_event(client, "New event", f"{payload['title']} → boss {payload['boss_key']}", user_id)
 
 
 async def submitkind_command(client, message):
@@ -199,7 +291,11 @@ async def adminhelp_command(client, message):
         "Reply to a user + /addmod → grant exact permissions\n"
         "/pending → review queue\n"
         "/submithero → submit a hero\n"
+        "/submitvillain → submit a normal enemy, villain, or event boss\n"
+        "/submitevent → create a boss event\n"
         "/submitkind → submit a new content kind\n\n"
+        "Hero moves include separate Signature, Utility, and Ultimate damage values.\n"
+        "Set StarterOrigin to Enhanced, Tech, Mystic, or None.\n\n"
         "<b>Adding content</b>\n"
         "Draft → submit → rights check → owner approval → publish.\n"
         "Never replace a live hero without a version note.\n\n"
@@ -267,6 +363,7 @@ async def admin_callback(client, callback_query):
             parse_mode="html",
             reply_markup=owner_panel_markup(),
         )
+        await log_event(client, "Admin added", f"Moderator {target_id} → {', '.join(selected) or 'no permissions'}", target_id)
     elif action[1] in {"approve", "reject"}:
         submission_id = action[2]
         item = next((item for item in list_submissions("pending") if str(item["_id"]) == submission_id), None)
@@ -280,16 +377,51 @@ async def admin_callback(client, callback_query):
                 )
                 return
             seed_hero({**payload, "status": "published"})
+        elif action[1] == "approve" and item and item.get("content_kind") == "villain":
+            payload = item.get("payload", {})
+            if payload.get("rights_status") != "approved":
+                await callback_query.message.edit_text(
+                    "<b>Approval blocked</b>\n\nRights status must be approved before an enemy can be published.",
+                    parse_mode="html",
+                    reply_markup=owner_panel_markup(),
+                )
+                return
+            publish_villain(payload)
+        elif action[1] == "approve" and item and item.get("content_kind") == "event":
+            publish_event(item.get("payload", {}))
         elif action[1] == "approve" and item:
             publish_content(item.get("content_kind", "content"), item.get("title", "Untitled"), item.get("payload", {}))
         review_submission(submission_id, "approved" if action[1] == "approve" else "rejected", str(callback_query.from_user.id))
         await callback_query.message.edit_text(f"<b>Submission {action[1]}d</b>\n\nReview recorded.", parse_mode="html", reply_markup=owner_panel_markup())
+        if item:
+            await log_event(
+                client,
+                "Owner approval" if action[1] == "approve" else "Owner rejection",
+                f"{item.get('content_kind')} → {item.get('title')}",
+                callback_query.from_user.id,
+            )
     elif action[1] == "hero_guide":
         await callback_query.message.edit_text(
             "<b>Hero guide</b>\n\n"
-            "Submit with /submithero and 14 pipe-separated fields.\n"
-            "Required → key, name, codename, source, universe, faction, role, rarity, alignment, description, three abilities, rights status.\n"
+            "Submit with /submithero and 18 pipe-separated fields.\n"
+            "Required → identity, source, universe, role, three named moves, three damage values, rights status, and StarterOrigin.\n"
             "Original or licensed only → owner approval before publish.",
+            parse_mode="html",
+            reply_markup=owner_panel_markup(),
+        )
+    elif action[1] == "enemy_guide":
+        await callback_query.message.edit_text(
+            "<b>Enemy guide</b>\n\n"
+            "/submitvillain key | Name | EnemyType | Faction | HP | Attack | Signature | Ultimate | NemesisHeroKey | RightsStatus\n\n"
+            "normal → repeatable PvE\nvillain → boss/Rift PvE\nevent_boss → event encounter",
+            parse_mode="html",
+            reply_markup=owner_panel_markup(),
+        )
+    elif action[1] == "event_guide":
+        await callback_query.message.edit_text(
+            "<b>Event guide</b>\n\n"
+            "/submitevent key | Title | BossKey | Description | RewardCredits\n\n"
+            "Publish the event boss first, then publish the event.",
             parse_mode="html",
             reply_markup=owner_panel_markup(),
         )
@@ -311,6 +443,8 @@ def register(client) -> None:
     client.add_handler(MessageHandler(owner_command, filters.command("owner")))
     client.add_handler(MessageHandler(addmod_command, filters.command("addmod")))
     client.add_handler(MessageHandler(submithero_command, filters.command("submithero")))
+    client.add_handler(MessageHandler(submitvillain_command, filters.command("submitvillain")))
+    client.add_handler(MessageHandler(submitevent_command, filters.command("submitevent")))
     client.add_handler(MessageHandler(submitkind_command, filters.command("submitkind")))
     client.add_handler(MessageHandler(adminhelp_command, filters.command("adminhelp")))
     client.add_handler(MessageHandler(guideadmin_command, filters.command("guideadmin")))

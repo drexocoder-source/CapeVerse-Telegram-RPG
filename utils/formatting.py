@@ -44,6 +44,7 @@ def main_menu_markup() -> InlineKeyboardMarkup:
                 InlineKeyboardButton("Arena", callback_data="menu:arena"),
                 InlineKeyboardButton("The Rift", callback_data="menu:rift"),
             ],
+            [InlineKeyboardButton("Events →", callback_data="menu:events")],
             [
                 InlineKeyboardButton("Profile", callback_data="menu:profile"),
                 InlineKeyboardButton("Guide", callback_data="menu:guide"),

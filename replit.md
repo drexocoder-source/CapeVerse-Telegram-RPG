@@ -22,7 +22,7 @@ CapeVerse is a Kurigram-powered Telegram superhero collection RPG with MongoDB p
 
 - `app.py` — Kurigram entry point
 - `web.py` — minimal Flask welcome endpoint
-- `database/` — MongoDB persistence, indexes, and seed content
+- `database/` — MongoDB persistence and indexes
 - `handlers/` — player and owner/moderator Telegram handlers
 - `plugins/` — battle, recruitment, missions, Arena, and Rift systems
 - `utils/` — Telegram formatting and generated profile cards
@@ -32,6 +32,8 @@ CapeVerse is a Kurigram-powered Telegram superhero collection RPG with MongoDB p
 
 - Administration stays inside the Telegram bot; Flask exposes only plain welcome/health text.
 - Published heroes require approved rights status.
+- Heroes, normal enemies, villains, and event bosses are owner-created; no starter roster is built in.
+- Each hero stores its own move names and damage values for battle resolution.
 - Player-facing messages favor arrows, typography, and short separators over borders or heavy emoji.
 - MongoDB is the source of truth for players, content, teams, battles, permissions, and economy ledger entries.
 
@@ -43,6 +45,8 @@ CapeVerse is a Kurigram-powered Telegram superhero collection RPG with MongoDB p
 - Recruitment Beacon with Signal Boost
 - Patrols and Case Files
 - Asynchronous Arena battles
+- Admin-published normal-enemy and villain PvE
+- Boss events linked to published event bosses
 - Rift floors and boss encounters
 - Bot-based owner approval and per-command moderator permissions
 
@@ -50,6 +54,7 @@ CapeVerse is a Kurigram-powered Telegram superhero collection RPG with MongoDB p
 
 - Keep Flask limited to a simple text welcome page.
 - Keep all owner, moderator, and game administration inside the Python Telegram bot.
+- Send important user, character, admin, content, approval, and battle logs to the configured log chat and owner.
 - Use mostly clean text symbols and arrows; use few emojis, especially in PvE and PvP.
 
 ## Gotchas
