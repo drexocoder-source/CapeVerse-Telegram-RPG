@@ -41,7 +41,7 @@ def main_menu_markup() -> InlineKeyboardMarkup:
                 InlineKeyboardButton("Missions", callback_data="menu:missions"),
             ],
             [
-                InlineKeyboardButton("Arena", callback_data="menu:arena"),
+                InlineKeyboardButton("Arena", callback_data="pvp:menu"),
                 InlineKeyboardButton("The Rift", callback_data="menu:rift"),
             ],
             [InlineKeyboardButton("Events →", callback_data="menu:events")],
@@ -58,8 +58,11 @@ def main_menu_markup() -> InlineKeyboardMarkup:
     )
 
 
-def back_markup() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([[InlineKeyboardButton("← Back to menu", callback_data="menu:home")]])
+def back_markup(
+    callback_data: str = "menu:home",
+    label: str = "← Main menu",
+) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([[InlineKeyboardButton(label, callback_data=callback_data)]])
 
 
 def profile_text(profile: dict[str, Any], owned_count: int, team_count: int, synergy: int) -> str:

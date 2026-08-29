@@ -11,6 +11,7 @@ from database.mongo import (
     claim_timed_reward,
     evolve_character,
     get_hero,
+    get_content_wizard,
     get_or_create_user,
     get_owned_hero,
     get_or_create_user_with_status,
@@ -22,8 +23,11 @@ from database.mongo import (
     list_heroes,
     list_owned_heroes,
     list_relics,
+    list_teams,
+    rename_team,
     research_character,
     save_team,
+    set_active_team,
     update_player,
 )
 from guide import ensure_guide_pdf
@@ -78,8 +82,11 @@ GUIDE_TOPICS = {
         "/main or /menu → open the main game menu\n"
         "/profile → generate your profile card\n"
         "/inventory → wallet, collection, relics, and reward access\n"
+        "/team → manage and name three battle lineups\n"
         "/char NAME → global codex story, photo, moves, and research/evolution\n"
         "/mychar NAME → your owned character, XP, stars, and actions\n"
+        "/pve → normal enemies and villain hunts\n"
+        "/pvp → asynchronous player Arena\n"
         "/daily and /weekly → timed signal rewards\n"
         "/guide → open this guide center\n"
         "/help → open the main menu",
@@ -89,7 +96,8 @@ GUIDE_TOPICS = {
         "<b>Heroes and teams</b>\n\n"
         "Heroes may be Human, Enhanced Human, Tech-Enhanced, Mystic, Alien, or another custom type.\n"
         "They are grouped by universe, place, faction, role, rarity, and alignment.\n"
-        "A team holds up to three owned heroes. Duplicate pulls increase stars.\n"
+        "You can maintain Team 1, Team 2, and Team 3, name each lineup, and choose the active team.\n"
+        "Each team holds up to three owned heroes. Duplicate pulls increase stars.\n"
         "Use /char to see the designer card, character XP, moves, unlock levels, cooldowns, effects, and evolution.",
     ),
     "recruit": (
@@ -114,7 +122,7 @@ GUIDE_TOPICS = {
     ),
     "inventory": (
         "Inventory and rewards",
-        "<b>Inventory · Version 0.8</b>\n\n"
+        "<b>Inventory</b>\n\n"
         "Registration begins with 500 Cape Credits, 2 Signal Shards, 5 Patrol Intel, and 0 Prism Cores.\n"
         "/inventory shows currencies, owned characters, relics, and research archives.\n\n"
         "/daily gives a small credit, Intel, and XP reward.\n"
@@ -219,8 +227,15 @@ def _battle_markup(
     moves: list[dict] | None = None,
     cooldowns: dict | None = None,
 ) -> InlineKeyboardMarkup:
+    back_target = {
+        "arena": "pvp:menu",
+        "rift": "menu:home",
+        "event": "menu:events",
+        "story": "menu:battle",
+        "villain": "menu:battle",
+    }.get(mode, "menu:battle")
     if finished:
-        return InlineKeyboardMarkup([[InlineKeyboardButton("← Main menu", callback_data="menu:home")]])
+        return InlineKeyboardMarkup([[InlineKeyboardButton("← Battle menu", callback_data=back_target)]])
     names = move_names or {}
     available = moves or [
         {"key": "signature", "name": names.get("signature", "Signature")},
@@ -237,7 +252,7 @@ def _battle_markup(
             callback_data=f"battle:{battle_id}:{move['key']}",
         ))
     rows = [buttons[index:index + 2] for index in range(0, len(buttons), 2)]
-    rows.append([InlineKeyboardButton("← Main menu", callback_data="menu:home")])
+    rows.append([InlineKeyboardButton("← Battle menu", callback_data=back_target)])
     return InlineKeyboardMarkup(rows)
 
 
@@ -381,16 +396,24 @@ def _global_character_markup() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(rows)
 
 
-def _character_actions(hero: dict, owned: dict | None) -> InlineKeyboardMarkup:
+def _character_actions(
+    hero: dict,
+    owned: dict | None,
+    telegram_id: int,
+    back_callback: str = "char:global",
+) -> InlineKeyboardMarkup:
     rows = [[InlineKeyboardButton("Full stats & moves →", callback_data=f"char:stats:{hero['hero_key']}")]]
-    if str(hero.get("source", "")).startswith("Licensed"):
-        rows.append([InlineKeyboardButton("Research archive →", callback_data=f"char:research:{hero['hero_key']}")])
+    licensed = str(hero.get("source", "")).startswith("Licensed")
+    if licensed:
+        if hero.get("research_concepts"):
+            researched = is_character_researched(telegram_id, hero["hero_key"])
+            label = "Research archive ✓" if researched else "Research archive →"
+            rows.append([InlineKeyboardButton(label, callback_data=f"char:research:{hero['hero_key']}")])
     elif owned and not owned.get("evolved"):
         rows.append([InlineKeyboardButton("Evolution guide / evolve →", callback_data=f"char:evolve:{hero['hero_key']}")])
     if owned:
         rows.append([InlineKeyboardButton("View my copy →", callback_data=f"mychar:view:{hero['hero_key']}")])
-    rows.append([InlineKeyboardButton("Global codex", callback_data="char:global")])
-    rows.append([InlineKeyboardButton("My characters", callback_data="mychar:list")])
+    rows.append([InlineKeyboardButton("← Back", callback_data=back_callback)])
     return InlineKeyboardMarkup(rows)
 
 
@@ -411,6 +434,66 @@ def _inventory_text(telegram_id: int) -> str:
         f"Research archives → {inventory['research']}\n\n"
         "Daily and weekly rewards appear below."
     )
+
+
+def _teams_text(telegram_id: int) -> str:
+    lines = ["<b>Your teams</b>", "", "Create up to three named lineups. The active team enters PvE and PvP."]
+    for team in list_teams(telegram_id):
+        marker = "ACTIVE" if team["active"] else "READY" if team["members"] else "EMPTY"
+        lines.append(f"\n<b>{team['team_number']} · {escape(str(team['name']))}</b> · {marker}")
+        if team["members"]:
+            lines.append(" / ".join(escape(str(member.get("name", "Hero"))) for member in team["members"]))
+    return "\n".join(lines)
+
+
+def _teams_markup(telegram_id: int) -> InlineKeyboardMarkup:
+    teams = list_teams(telegram_id)
+    rows = []
+    for index in range(0, len(teams), 2):
+        rows.append([
+            InlineKeyboardButton(
+                f"{'✓ ' if team['active'] else ''}{team['name'][:18]}",
+                callback_data=f"team:view:{team['team_number']}",
+            )
+            for team in teams[index:index + 2]
+        ])
+    rows.append([InlineKeyboardButton("← Main menu", callback_data="menu:home")])
+    return InlineKeyboardMarkup(rows)
+
+
+def _team_detail(telegram_id: int, team_number: int) -> tuple[str, InlineKeyboardMarkup]:
+    team = next(team for team in list_teams(telegram_id) if team["team_number"] == team_number)
+    member_ids = {str(member["_id"]) for member in team["members"]}
+    lines = [
+        f"<b>{escape(str(team['name']))}</b>",
+        f"Team {team_number} · {'ACTIVE' if team['active'] else 'INACTIVE'}",
+        "",
+        "<b>Lineup</b>",
+    ]
+    if team["members"]:
+        lines.extend(
+            f"{index} → {escape(str(member.get('name', 'Hero')))} · {escape(str(member.get('role', 'Unknown')))}"
+            for index, member in enumerate(team["members"], 1)
+        )
+    else:
+        lines.append("No characters selected.")
+    lines.extend(["", "Tap an owned character to add or remove it. Maximum three."])
+    controls = [
+        InlineKeyboardButton("Use this team", callback_data=f"team:use:{team_number}"),
+        InlineKeyboardButton("Rename", callback_data=f"team:rename:{team_number}"),
+    ]
+    rows = [controls]
+    owned = list_owned_heroes(telegram_id)[:20]
+    hero_buttons = [
+        InlineKeyboardButton(
+            f"{'✓ ' if str(hero['_id']) in member_ids else ''}{str(hero.get('name', 'Hero'))[:16]}",
+            callback_data=f"team:toggle:{team_number}:{hero['_id']}",
+        )
+        for hero in owned
+    ]
+    rows.extend(hero_buttons[index:index + 2] for index in range(0, len(hero_buttons), 2))
+    rows.append([InlineKeyboardButton("← All teams", callback_data="team:list")])
+    return "\n".join(lines), InlineKeyboardMarkup(rows)
 
 
 def _character_card_caption(hero: dict, owned: dict | None) -> str:
@@ -439,7 +522,7 @@ async def _send_global_character(message, hero: dict, telegram_id: int) -> None:
                 photo=photo,
                 caption=_character_card_caption(hero, None),
                 parse_mode="html",
-                reply_markup=_character_actions(hero, owned),
+                reply_markup=_character_actions(hero, owned, telegram_id),
             )
             return
         except Exception:
@@ -449,7 +532,7 @@ async def _send_global_character(message, hero: dict, telegram_id: int) -> None:
         photo=str(card),
         caption=_character_card_caption(hero, None),
         parse_mode="html",
-        reply_markup=_character_actions(hero, owned),
+        reply_markup=_character_actions(hero, owned, telegram_id),
     )
 
 
@@ -563,7 +646,7 @@ async def mychar_command(client, message):
         photo=str(card),
         caption=_character_card_caption(hero, owned),
         parse_mode="html",
-        reply_markup=_character_actions(hero, owned),
+        reply_markup=_character_actions(hero, owned, message.from_user.id, "mychar:list"),
     )
     await message.reply_text(_character_detail_text(hero, owned), parse_mode="html")
 
@@ -587,6 +670,64 @@ async def inventory_command(client, message):
     )
 
 
+async def team_command(client, message):
+    _player(message)
+    await message.reply_text(
+        _teams_text(message.from_user.id),
+        parse_mode="html",
+        reply_markup=_teams_markup(message.from_user.id),
+    )
+
+
+async def pve_command(client, message):
+    _player(message)
+    await message.reply_text(
+        "<b>PvE operations</b>\n\nChoose a repeatable street enemy or a stronger published villain.",
+        parse_mode="html",
+        reply_markup=InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("Normal enemy", callback_data="pve:normal"),
+                InlineKeyboardButton("Villain hunt", callback_data="pve:villain"),
+            ],
+            [InlineKeyboardButton("← Main menu", callback_data="menu:home")],
+        ]),
+    )
+
+
+async def pvp_command(client, message):
+    _player(message)
+    await message.reply_text(
+        "<b>PvP Arena</b>\n\nFight another registered player’s defensive signal team. Arena victories change rating.",
+        parse_mode="html",
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("Find opponent →", callback_data="menu:arena")],
+            [InlineKeyboardButton("← Main menu", callback_data="menu:home")],
+        ]),
+    )
+
+
+async def team_name_message(client, message):
+    if (message.text or "").lstrip().startswith("/"):
+        return
+    if get_content_wizard(message.from_user.id):
+        return
+    profile = get_profile(message.from_user.id) or {}
+    team_number = int(profile.get("pending_team_rename", 0) or 0)
+    if team_number not in {1, 2, 3}:
+        return
+    name = " ".join((message.text or "").strip().split())
+    if not 2 <= len(name) <= 32:
+        await message.reply_text("<b>Invalid team name</b>\n\nUse 2–32 characters.", parse_mode="html")
+        return
+    rename_team(message.from_user.id, team_number, name)
+    update_player(message.from_user.id, pending_team_rename=0)
+    await message.reply_text(
+        f"<b>Team renamed</b>\n\nTeam {team_number} → {escape(name)}",
+        parse_mode="html",
+        reply_markup=_teams_markup(message.from_user.id),
+    )
+
+
 async def _claim_reward_message(message, telegram_id: int, period: str, edit: bool = False) -> None:
     result = claim_timed_reward(telegram_id, period)
     if not result["ok"]:
@@ -594,7 +735,7 @@ async def _claim_reward_message(message, telegram_id: int, period: str, edit: bo
         when = next_claim.strftime("%d %b %Y · %H:%M UTC") if next_claim else "later"
         text = f"<b>{period.title()} reward already claimed</b>\n\nNext claim → {when}"
         if edit:
-            await _edit_callback(message, text, back_markup())
+            await _edit_callback(message, text, back_markup("menu:inventory", "← Inventory"))
         else:
             await message.reply_text(text, parse_mode="html", reply_markup=back_markup())
         return
@@ -658,14 +799,14 @@ async def callback_handler(client, callback_query):
         hero = get_hero(hero_key)
         owned = get_owned_hero(user_id, hero_key)
         if not hero:
-            await callback_query.message.reply_text("<b>Character unavailable</b>", parse_mode="html")
+            await _edit_callback(callback_query.message, "<b>Character unavailable</b>", back_markup("char:global", "← Character codex"))
             return
         licensed = str(hero.get("source", "")).startswith("Licensed")
         progression = "Research Archive" if licensed else "Evolution path"
         await _edit_callback(
             callback_query.message,
             f"{_character_card_caption(hero, None)}\n\n{_character_detail_text(hero, owned)}\n\nProgression → {progression}",
-            _character_actions(hero, owned),
+            _character_actions(hero, owned, user_id, "char:global"),
         )
         return
     if data.startswith("mychar:view:"):
@@ -673,13 +814,12 @@ async def callback_handler(client, callback_query):
         hero = get_hero(hero_key)
         owned = get_owned_hero(user_id, hero_key)
         if not hero or not owned:
-            await callback_query.message.reply_text("<b>Owned character unavailable</b>", parse_mode="html")
+            await _edit_callback(callback_query.message, "<b>Owned character unavailable</b>", back_markup("mychar:list", "← My characters"))
             return
-        card = generate_character_card(hero, owned)
         await _edit_callback(
             callback_query.message,
             f"{_character_card_caption(hero, owned)}\n\n{_character_detail_text(hero, owned)}",
-            _character_actions(hero, owned),
+            _character_actions(hero, owned, user_id, "mychar:list"),
         )
         return
     if data.startswith("char:stats:"):
@@ -688,13 +828,21 @@ async def callback_handler(client, callback_query):
         if not hero:
             return
         owned = get_owned_hero(user_id, hero_key)
-        await _edit_callback(callback_query.message, _character_detail_text(hero, owned), _character_actions(hero, owned))
+        await _edit_callback(
+            callback_query.message,
+            _character_detail_text(hero, owned),
+            _character_actions(hero, owned, user_id, f"char:view:{hero_key}"),
+        )
         return
     if data.startswith("char:research:"):
         hero_key = data.split(":", 2)[2]
         result = research_character(user_id, hero_key)
         if not result["ok"]:
-            await _edit_callback(callback_query.message, f"<b>Research unavailable</b>\n\n{result['reason']}", back_markup())
+            await _edit_callback(
+                callback_query.message,
+                f"<b>Research unavailable</b>\n\n{result['reason']}",
+                back_markup(f"char:view:{hero_key}", "← Character"),
+            )
             return
         hero = result["hero"]
         status = "New archive unlocked" if result["new"] else "Archive already researched"
@@ -707,7 +855,7 @@ async def callback_handler(client, callback_query):
             callback_query.message,
             f"<b>{status}</b>\n\n{escape(str(hero.get('name', hero_key)))}\n\n{concept_text}\n\n"
             "Licensed suits and forms are documented as research; they do not replace character evolution.",
-            back_markup(),
+            back_markup(f"char:view:{hero_key}", "← Character"),
         )
         await log_event(client, "Character research", f"{hero.get('name', hero_key)} archive viewed", user_id)
         return
@@ -718,19 +866,23 @@ async def callback_handler(client, callback_query):
             await _edit_callback(
                 callback_query.message,
                 "<b>Use Research Archive</b>\n\nLicensed suits and documented forms are research entries, not evolutions.",
-                back_markup(),
+                back_markup(f"char:view:{hero_key}", "← Character"),
             )
             return
         result = evolve_character(user_id, hero_key)
         if not result["ok"]:
-            await _edit_callback(callback_query.message, f"<b>Evolution unavailable</b>\n\n{result['reason']}", back_markup())
+            await _edit_callback(
+                callback_query.message,
+                f"<b>Evolution unavailable</b>\n\n{result['reason']}",
+                back_markup(f"mychar:view:{hero_key}", "← Character"),
+            )
             return
         owned = result["character"]
         await _edit_callback(
             callback_query.message,
             f"<b>Evolution complete</b>\n\n{escape(str(hero.get('name', hero_key)))} reached an evolved form.\n"
             "The character card and battle identity now show the evolution.",
-            back_markup(),
+            back_markup(f"mychar:view:{hero_key}", "← Character"),
         )
         await log_event(client, "Character evolution", f"{hero.get('name', hero_key)} evolved", user_id)
         return
@@ -791,6 +943,64 @@ async def callback_handler(client, callback_query):
     if data == "menu:profile":
         await show_profile(callback_query.message, edit=True, telegram_id=user_id)
         return
+    if data == "team:list":
+        await _edit_callback(callback_query.message, _teams_text(user_id), _teams_markup(user_id))
+        return
+    if data.startswith("team:view:"):
+        team_number = int(data.split(":", 2)[2])
+        update_player(user_id, pending_team_rename=0)
+        text, markup = _team_detail(user_id, team_number)
+        await _edit_callback(callback_query.message, text, markup)
+        return
+    if data.startswith("team:use:"):
+        team_number = int(data.split(":", 2)[2])
+        if not get_team(user_id, team_number):
+            await _edit_callback(
+                callback_query.message,
+                "<b>Empty team</b>\n\nAdd at least one owned character before activating this team.",
+                back_markup(f"team:view:{team_number}", "← Team"),
+            )
+            return
+        set_active_team(user_id, team_number)
+        await _edit_callback(callback_query.message, _teams_text(user_id), _teams_markup(user_id))
+        return
+    if data.startswith("team:rename:"):
+        team_number = int(data.split(":", 2)[2])
+        update_player(user_id, pending_team_rename=team_number)
+        await _edit_callback(
+            callback_query.message,
+            f"<b>Rename Team {team_number}</b>\n\nSend a new team name using 2–32 characters.",
+            back_markup(f"team:view:{team_number}", "← Cancel"),
+        )
+        return
+    if data.startswith("team:toggle:"):
+        _, _, number, owned_id = data.split(":", 3)
+        team_number = int(number)
+        team = next(team for team in list_teams(user_id) if team["team_number"] == team_number)
+        member_ids = [str(member["_id"]) for member in team["members"]]
+        owned_ids = {str(hero["_id"]) for hero in list_owned_heroes(user_id)}
+        if owned_id not in owned_ids:
+            await _edit_callback(
+                callback_query.message,
+                "<b>Character unavailable</b>",
+                back_markup(f"team:view:{team_number}", "← Team"),
+            )
+            return
+        if owned_id in member_ids:
+            member_ids.remove(owned_id)
+        elif len(member_ids) >= 3:
+            await _edit_callback(
+                callback_query.message,
+                "<b>Team is full</b>\n\nRemove a character before adding another.",
+                back_markup(f"team:view:{team_number}", "← Team"),
+            )
+            return
+        else:
+            member_ids.append(owned_id)
+        save_team(user_id, member_ids, team_number, team["name"])
+        text, markup = _team_detail(user_id, team_number)
+        await _edit_callback(callback_query.message, text, markup)
+        return
     if data == "menu:inventory":
         await _edit_callback(
             callback_query.message,
@@ -807,6 +1017,17 @@ async def callback_handler(client, callback_query):
         return
     if data in {"reward:daily", "reward:weekly"}:
         await _claim_reward_message(callback_query.message, user_id, data.split(":", 1)[1], edit=True)
+        return
+    if data == "pvp:menu":
+        await _edit_callback(
+            callback_query.message,
+            "<b>PvP Arena</b>\n\nFight another registered player’s defensive signal team. "
+            "This is asynchronous PvP: the opponent does not need to be online.",
+            InlineKeyboardMarkup([
+                [InlineKeyboardButton("Find opponent →", callback_data="menu:arena")],
+                [InlineKeyboardButton("← Main menu", callback_data="menu:home")],
+            ]),
+        )
         return
     if data == "menu:guide":
         await send_guide_menu(callback_query.message, edit=True)
@@ -842,13 +1063,11 @@ async def callback_handler(client, callback_query):
         await callback_query.message.edit_text(text, parse_mode="html", reply_markup=back_markup())
         return
     if data == "menu:team":
-        team = get_team(user_id)
-        if not team:
-            text = "<b>Team 1</b>\n\nYour team is empty.\nChoose an Origin first →"
-        else:
-            members = "\n".join(f"{hero['slot'] if 'slot' in hero else index + 1}  →  <b>{hero['name']}</b>  ·  {hero['role']}" for index, hero in enumerate(team))
-            text = f"<b>Team 1</b>\n\n{members}\n\nThree slots → roles → synergy"
-        await callback_query.message.edit_text(text, parse_mode="html", reply_markup=back_markup())
+        await callback_query.message.edit_text(
+            _teams_text(user_id),
+            parse_mode="html",
+            reply_markup=_teams_markup(user_id),
+        )
         return
     if data == "menu:relics":
         relics = list_relics(user_id)
@@ -872,7 +1091,11 @@ async def callback_handler(client, callback_query):
             text = f"<b>Relic forged</b>\n\n◆ {relic['name']}\n{relic['slot']}  →  {relic['base_stat']}\nSubstat → {relic['substat']}\n\nCape Credits → {result['balance']}"
         else:
             text = f"<b>Forge unavailable</b>\n\n{result['reason']}"
-        await callback_query.message.edit_text(text, parse_mode="html", reply_markup=back_markup())
+        await callback_query.message.edit_text(
+            text,
+            parse_mode="html",
+            reply_markup=back_markup("menu:relics", "← Relics"),
+        )
         return
     if data == "menu:recruit":
         profile = get_profile(user_id) or {}
@@ -903,7 +1126,11 @@ async def callback_handler(client, callback_query):
                 f"Signal Boost → {result['signal_boost']}%"
             )
             await log_event(client, "New character", f"Beacon collected → {hero['name']}", user_id)
-        await callback_query.message.edit_text(text, parse_mode="html", reply_markup=back_markup())
+        await callback_query.message.edit_text(
+            text,
+            parse_mode="html",
+            reply_markup=back_markup("menu:recruit", "← Recruitment"),
+        )
         return
     if data == "menu:missions":
         profile = get_profile(user_id) or {}
@@ -924,7 +1151,11 @@ async def callback_handler(client, callback_query):
     if data == "mission:patrol":
         result = claim_patrol(user_id)
         text = f"<b>Patrol complete</b>\n\n+ {result.get('credits', 0)} Cape Credits\n+ {result.get('xp', 0)} player XP · Level {result.get('level', 1)}\n→ The city keeps moving." if result["ok"] else f"<b>Patrol unavailable</b>\n\n{result['reason']}"
-        await callback_query.message.edit_text(text, parse_mode="html", reply_markup=back_markup())
+        await callback_query.message.edit_text(
+            text,
+            parse_mode="html",
+            reply_markup=back_markup("menu:missions", "← Missions"),
+        )
         return
     if data.startswith("mission:case:"):
         alignment = data.split(":", 2)[2]
@@ -935,7 +1166,11 @@ async def callback_handler(client, callback_query):
             if result["ok"]
             else f"<b>Case File unavailable</b>\n\n{result['reason']}"
         )
-        await callback_query.message.edit_text(text, parse_mode="html", reply_markup=back_markup())
+        await callback_query.message.edit_text(
+            text,
+            parse_mode="html",
+            reply_markup=back_markup("menu:missions", "← Missions"),
+        )
         return
     if data == "menu:battle":
         await callback_query.message.edit_text(
@@ -956,7 +1191,11 @@ async def callback_handler(client, callback_query):
         stage = "Street Operation" if mode == "story" else "Villain Hunt"
         battle_info = start_battle(user_id, mode, stage)
         if not battle_info["ok"]:
-            await callback_query.message.edit_text(f"<b>PvE unavailable</b>\n\n{battle_info['reason']}", parse_mode="html", reply_markup=back_markup())
+            await callback_query.message.edit_text(
+                f"<b>PvE unavailable</b>\n\n{battle_info['reason']}",
+                parse_mode="html",
+                reply_markup=back_markup("menu:battle", "← PvE"),
+            )
             return
         battle = {
             "stage": stage,
@@ -984,7 +1223,11 @@ async def callback_handler(client, callback_query):
     if data == "menu:arena":
         battle_info = start_arena(user_id)
         if not battle_info["ok"]:
-            await callback_query.message.edit_text(f"<b>Arena unavailable</b>\n\n{battle_info['reason']}", parse_mode="html", reply_markup=back_markup())
+            await callback_query.message.edit_text(
+                f"<b>Arena unavailable</b>\n\n{battle_info['reason']}",
+                parse_mode="html",
+                reply_markup=back_markup("pvp:menu", "← PvP"),
+            )
             return
         battle = {"stage": "Sanctioned Bout", "enemy_hp": battle_info["enemy_hp"], "enemy_max_hp": battle_info["enemy_hp"], "player_hp": battle_info["player_hp"], "player_max_hp": battle_info["player_hp"], "turn": 1, "actor_level": battle_info["actor_level"], "enemy_level": battle_info["enemy_level"]}
         battle["actor_name"] = battle_info["actor_name"]
@@ -1019,7 +1262,11 @@ async def callback_handler(client, callback_query):
         event_key = data.split(":", 2)[2]
         battle_info = start_event_boss(user_id, event_key)
         if not battle_info["ok"]:
-            await callback_query.message.edit_text(f"<b>Event unavailable</b>\n\n{battle_info['reason']}", parse_mode="html", reply_markup=back_markup())
+            await callback_query.message.edit_text(
+                f"<b>Event unavailable</b>\n\n{battle_info['reason']}",
+                parse_mode="html",
+                reply_markup=back_markup("menu:events", "← Events"),
+            )
             return
         battle = {
             "stage": "Event Boss",
@@ -1077,6 +1324,10 @@ def register(client) -> None:
     client.add_handler(MessageHandler(char_command, filters.command("char")))
     client.add_handler(MessageHandler(mychar_command, filters.command("mychar")))
     client.add_handler(MessageHandler(inventory_command, filters.command("inventory")))
+    client.add_handler(MessageHandler(team_command, filters.command(["team", "teams"])))
+    client.add_handler(MessageHandler(pve_command, filters.command("pve")))
+    client.add_handler(MessageHandler(pvp_command, filters.command(["pvp", "arena"])))
     client.add_handler(MessageHandler(daily_command, filters.command("daily")))
     client.add_handler(MessageHandler(weekly_command, filters.command("weekly")))
     client.add_handler(CallbackQueryHandler(callback_handler))
+    client.add_handler(MessageHandler(team_name_message, filters.private & filters.text), group=3)

@@ -36,6 +36,22 @@ def _choose_enemy(telegram_id: int, mode: str, player_level: int, enemy_key: str
         )
         if not opponent:
             return None
+        opponent_team = get_team(int(opponent["telegram_id"]))
+        if opponent_team:
+            lead_owned = opponent_team[0]
+            lead = get_hero(lead_owned["hero_key"])
+            if lead:
+                lead_level = max(1, int(lead_owned.get("level", 1)))
+                return {
+                    **lead,
+                    "villain_key": f"player_{opponent['telegram_id']}_{lead['hero_key']}",
+                    "name": f"{opponent.get('first_name') or opponent.get('username') or 'Challenger'} · {lead['name']}",
+                    "enemy_type": "player",
+                    "hp": 100 + (lead_level - 1) * 8,
+                    "attack": max(8, int(lead.get("signature_damage", 14))),
+                    "min_level": lead_level,
+                    "nemesis_for": [],
+                }
         return {
             "villain_key": f"player_{opponent['telegram_id']}",
             "name": opponent.get("first_name") or opponent.get("username") or "Arena Challenger",

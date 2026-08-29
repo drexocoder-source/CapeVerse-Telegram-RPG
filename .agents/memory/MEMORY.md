@@ -1,1 +1,2 @@
 - [Telegram startup](telegram-startup.md) — keep command-menu registration asynchronous after Kurigram connects so slow Telegram handshakes do not block bot readiness.
+- [Player state fields](player-state-fields.md) — any new mutable user setting must be added to both account defaults and the player-update allowlist.

@@ -88,6 +88,8 @@ def get_or_create_user_with_status(telegram_id: int, username: str = "", first_n
                 "rating": 1000,
                 "rift_floor": 1,
                 "signal_boost": 0,
+                "active_team": 1,
+                "pending_team_rename": 0,
                 "guide_sent": False,
                 "xp": 0,
                 "level": 1,
@@ -115,6 +117,8 @@ def update_player(telegram_id: int, **fields: Any) -> dict[str, Any] | None:
         "rating",
         "rift_floor",
         "signal_boost",
+        "active_team",
+        "pending_team_rename",
         "guide_sent",
         "xp",
         "level",
@@ -203,6 +207,8 @@ def research_character(telegram_id: int, hero_key: str) -> dict[str, Any]:
         return {"ok": False, "reason": "Character not found."}
     if not str(hero.get("source", "")).lower().startswith("licensed"):
         return {"ok": False, "reason": "Research Archives are reserved for licensed suit and form catalogs."}
+    if not hero.get("research_concepts"):
+        return {"ok": False, "reason": "No research archive has been added for this character yet."}
     result = collection("character_research").update_one(
         {"telegram_id": telegram_id, "hero_key": hero_key},
         {
@@ -351,14 +357,20 @@ def search_players(query: str, limit: int = 10) -> list[dict[str, Any]]:
     return list(collection("users").find({"$or": [{"first_name": regex}, {"username": regex}]}).limit(limit))
 
 
-def save_team(telegram_id: int, owned_ids: list[str], team_number: int = 1) -> None:
+def save_team(
+    telegram_id: int,
+    owned_ids: list[str],
+    team_number: int = 1,
+    team_name: str | None = None,
+) -> None:
+    existing = collection("teams").find_one({"telegram_id": telegram_id, "team_number": team_number}) or {}
     collection("teams").update_one(
         {"telegram_id": telegram_id, "team_number": team_number},
         {
             "$set": {
                 "telegram_id": telegram_id,
                 "team_number": team_number,
-                "name": f"Team {team_number}",
+                "name": team_name or existing.get("name") or f"Team {team_number}",
                 "members": owned_ids[:3],
                 "updated_at": now(),
             },
@@ -368,12 +380,62 @@ def save_team(telegram_id: int, owned_ids: list[str], team_number: int = 1) -> N
     )
 
 
-def get_team(telegram_id: int, team_number: int = 1) -> list[dict[str, Any]]:
+def get_team(telegram_id: int, team_number: int | None = None) -> list[dict[str, Any]]:
+    if team_number is None:
+        profile = get_profile(telegram_id) or {}
+        team_number = max(1, min(3, int(profile.get("active_team", 1))))
     team = collection("teams").find_one({"telegram_id": telegram_id, "team_number": team_number})
     if not team:
         return []
     members = {str(hero["_id"]): hero for hero in list_owned_heroes(telegram_id)}
     return [members[owned_id] for owned_id in team.get("members", []) if owned_id in members]
+
+
+def list_teams(telegram_id: int) -> list[dict[str, Any]]:
+    records = {
+        int(team.get("team_number", 1)): team
+        for team in collection("teams").find({"telegram_id": telegram_id, "team_number": {"$in": [1, 2, 3]}})
+    }
+    profile = get_profile(telegram_id) or {}
+    active = max(1, min(3, int(profile.get("active_team", 1))))
+    result = []
+    for number in (1, 2, 3):
+        team = records.get(number, {})
+        result.append({
+            "team_number": number,
+            "name": team.get("name", f"Team {number}"),
+            "members": get_team(telegram_id, number),
+            "active": number == active,
+        })
+    return result
+
+
+def set_active_team(telegram_id: int, team_number: int) -> dict[str, Any] | None:
+    if team_number not in {1, 2, 3}:
+        return get_profile(telegram_id)
+    return update_player(telegram_id, active_team=team_number)
+
+
+def rename_team(telegram_id: int, team_number: int, name: str) -> None:
+    clean_name = " ".join(name.strip().split())[:32]
+    if not clean_name or team_number not in {1, 2, 3}:
+        return
+    collection("teams").update_one(
+        {"telegram_id": telegram_id, "team_number": team_number},
+        {
+            "$set": {
+                "telegram_id": telegram_id,
+                "team_number": team_number,
+                "name": clean_name,
+                "members": (collection("teams").find_one(
+                    {"telegram_id": telegram_id, "team_number": team_number}
+                ) or {}).get("members", []),
+                "updated_at": now(),
+            },
+            "$setOnInsert": {"created_at": now()},
+        },
+        upsert=True,
+    )
 
 
 def record_ledger(telegram_id: int, currency: str, amount: int, reason: str, balance_after: int) -> None:
