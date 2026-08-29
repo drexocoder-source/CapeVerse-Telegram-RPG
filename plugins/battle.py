@@ -9,6 +9,7 @@ from database.mongo import (
     get_profile,
     get_team,
     get_villain,
+    list_heroes,
     list_villains,
     record_ledger,
     update_battle,
@@ -74,6 +75,16 @@ def start_battle(
             "enemy_key": enemy.get("villain_key", ""),
             "enemy_name": enemy.get("name", "Unknown Threat"),
             "enemy_attack": int(enemy.get("attack", 12)),
+            "enemy_move_names": {
+                "signature": enemy.get("ability_signature", "Enemy Strike"),
+                "ultimate": enemy.get("ability_ultimate", "Enemy Ultimate"),
+            },
+            "enemy_move_damage": {
+                "signature": int(enemy.get("signature_damage", enemy.get("attack", 12))),
+                "ultimate": int(enemy.get("ultimate_damage", int(enemy.get("attack", 12)) * 2)),
+            },
+            "enemy_max_hp": int(enemy.get("hp", 100)),
+            "player_max_hp": 100,
             "actor_hero_key": actor["hero_key"],
             "actor_name": actor["name"],
             "move_names": {
@@ -115,7 +126,9 @@ def resolve_action(telegram_id: int, battle_id: str, action: str) -> dict[str, A
         return None
 
     action_damage = int(battle.get("move_damage", {}).get(action, 10))
-    enemy_damage = random.randint(max(4, int(battle.get("enemy_attack", 12)) - 4), int(battle.get("enemy_attack", 12)) + 3)
+    enemy_action = "ultimate" if int(battle["turn"]) % 3 == 0 else "signature"
+    enemy_base_damage = int(battle.get("enemy_move_damage", {}).get(enemy_action, battle.get("enemy_attack", 12)))
+    enemy_damage = random.randint(max(1, enemy_base_damage - 3), enemy_base_damage + 3)
     new_enemy_hp = max(0, int(battle["enemy_hp"]) - action_damage)
     new_player_hp = max(0, int(battle["player_hp"]) - (max(2, enemy_damage // 2) if action == "utility" else enemy_damage))
     move_name = battle.get("move_names", {}).get(action, action.title())
@@ -136,8 +149,13 @@ def resolve_action(telegram_id: int, battle_id: str, action: str) -> dict[str, A
         record_ledger(telegram_id, "credits", reward, f"{battle['mode']} battle victory", updates["credits"])
         log.append(f"Reward → +{reward} Cape Credits")
     elif new_player_hp == 0:
+        enemy_move = battle.get("enemy_move_names", {}).get(enemy_action, "Enemy attack")
+        log.append(f"{enemy_move} countered for {enemy_damage}")
         status = "lost"
         log.append("Defeat → regroup and try again")
+    else:
+        enemy_move = battle.get("enemy_move_names", {}).get(enemy_action, "Enemy attack")
+        log.append(f"{enemy_move} countered for {enemy_damage}")
     return update_battle(
         battle_id,
         enemy_hp=new_enemy_hp,
@@ -146,3 +164,45 @@ def resolve_action(telegram_id: int, battle_id: str, action: str) -> dict[str, A
         status=status,
         log=log[-8:],
     )
+
+
+def simulate_pve() -> dict[str, Any]:
+    heroes = list_heroes()
+    enemies = list_villains("normal") or list_villains("villain")
+    if not heroes:
+        return {"ok": False, "reason": "Publish at least one hero before using /test."}
+    if not enemies:
+        return {"ok": False, "reason": "Publish at least one normal enemy or villain before using /test."}
+    hero = heroes[0]
+    enemy = enemies[0]
+    hero_hp = 100
+    enemy_hp = int(enemy.get("hp", 100))
+    starting_enemy_hp = enemy_hp
+    turns: list[str] = []
+    moves = [
+        (hero.get("ability_signature", "Signature Move"), int(hero.get("signature_damage", 24))),
+        (hero.get("ability_utility", "Utility Move"), int(hero.get("utility_damage", 15))),
+        (hero.get("ability_ultimate", "Ultimate"), int(hero.get("ultimate_damage", 38))),
+    ]
+    for turn in range(1, 11):
+        move_name, damage = moves[(turn - 1) % len(moves)]
+        enemy_hp = max(0, enemy_hp - damage)
+        turns.append(f"{move_name} → {damage} damage · enemy {enemy_hp} HP")
+        if enemy_hp == 0:
+            break
+        use_ultimate = turn % 3 == 0
+        incoming = int(enemy.get("ultimate_damage" if use_ultimate else "signature_damage", enemy.get("attack", 12)))
+        hero_hp = max(0, hero_hp - incoming)
+        enemy_move = enemy.get("ability_ultimate" if use_ultimate else "ability_signature", "Counterattack")
+        turns.append(f"{enemy_move} → {incoming} damage · hero {hero_hp} HP")
+        if hero_hp == 0:
+            break
+    return {
+        "ok": True,
+        "hero": hero["name"],
+        "enemy": enemy["name"],
+        "hero_hp": 100,
+        "enemy_hp": starting_enemy_hp,
+        "turns": turns,
+        "result": "Hero victory" if enemy_hp == 0 else "Enemy victory" if hero_hp == 0 else "Turn limit reached",
+    }

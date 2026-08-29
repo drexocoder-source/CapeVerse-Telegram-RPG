@@ -1,4 +1,3 @@
-import json
 import os
 from typing import Any
 
@@ -8,7 +7,6 @@ from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 from database.mongo import (
     add_submission,
-    get_hero,
     list_moderators,
     list_submissions,
     publish_content,
@@ -18,6 +16,8 @@ from database.mongo import (
     seed_hero,
     upsert_moderator,
 )
+from handlers.content_wizard import register as register_content_wizard
+from plugins.battle import simulate_pve
 from utils.audit import log_event
 
 
@@ -36,6 +36,7 @@ PERMISSIONS = [
 ]
 pending_mod_targets: dict[int, int] = {}
 pending_mod_permissions: dict[int, set[str]] = {}
+pending_mod_names: dict[int, str] = {}
 
 
 def is_owner(user_id: int) -> bool:
@@ -61,8 +62,8 @@ def owner_panel_markup() -> InlineKeyboardMarkup:
                 InlineKeyboardButton("Moderators", callback_data="admin:mods"),
             ],
             [
-                InlineKeyboardButton("Add hero guide", callback_data="admin:hero_guide"),
-                InlineKeyboardButton("Add enemy guide", callback_data="admin:enemy_guide"),
+                InlineKeyboardButton("Add hero →", callback_data="wizard:start:hero"),
+                InlineKeyboardButton("Add enemy →", callback_data="wizard:start:villain"),
             ],
             [
                 InlineKeyboardButton("Add event guide", callback_data="admin:event_guide"),
@@ -105,6 +106,12 @@ def _target_from_message(message) -> int | None:
     return None
 
 
+def _target_name_from_message(message) -> str:
+    if message.reply_to_message and message.reply_to_message.from_user:
+        return message.reply_to_message.from_user.first_name or "Moderator"
+    return "Moderator"
+
+
 async def owner_command(client, message):
     if not is_owner(message.from_user.id):
         return
@@ -132,97 +139,15 @@ async def addmod_command(client, message):
         return
     pending_mod_targets[message.from_user.id] = target_id
     pending_mod_permissions[message.from_user.id] = set()
+    pending_mod_names[message.from_user.id] = _target_name_from_message(message)
     await message.reply_text(
-        f"<b>Moderator access</b>\n\nUser → <code>{target_id}</code>\n"
+        f"<b>Moderator access</b>\n\nName → {pending_mod_names[message.from_user.id]}\nID → <code>{target_id}</code>\n"
         "Tap permissions to grant or remove them.\n"
         "Save when finished →",
         parse_mode="html",
         reply_markup=permission_markup(target_id, set()),
     )
     await log_event(client, "Admin access", f"Moderator permission editor opened for {target_id}", target_id)
-
-
-async def submithero_command(client, message):
-    user_id = message.from_user.id
-    if not can(user_id, "submit_heroes"):
-        return
-    raw = (message.text or "").split(maxsplit=1)
-    if len(raw) < 2:
-        await message.reply_text(
-            "<b>Hero submission format</b>\n\n"
-            "/submithero key | Name | Codename | Source | Universe | Faction | Role | Rarity | Alignment | Description | Signature Move | Signature Damage | Utility Move | Utility Damage | Ultimate Move | Ultimate Damage | RightsStatus | StarterOrigin\n\n"
-            "StarterOrigin → Enhanced, Tech, Mystic, or None.\n"
-            "Use RightsStatus = approved only when you have rights or the hero is original.\n"
-            "The owner must approve every submission before publishing.",
-            parse_mode="html",
-        )
-        return
-    fields = [field.strip() for field in raw[1].split("|")]
-    if len(fields) != 18:
-        await message.reply_text("<b>Submission not saved</b>\n\nUse exactly 18 fields separated by |.\nSend /submithero to see the guide again.", parse_mode="html")
-        return
-    keys = [
-        "hero_key", "name", "codename", "source", "universe", "faction",
-        "role", "rarity", "alignment", "description",
-        "ability_signature", "signature_damage",
-        "ability_utility", "utility_damage",
-        "ability_ultimate", "ultimate_damage",
-        "rights_status", "starter_origin",
-    ]
-    payload = dict(zip(keys, fields))
-    payload["hero_key"] = payload["hero_key"].lower().replace(" ", "_")
-    try:
-        payload["signature_damage"] = int(payload["signature_damage"])
-        payload["utility_damage"] = int(payload["utility_damage"])
-        payload["ultimate_damage"] = int(payload["ultimate_damage"])
-    except ValueError:
-        await message.reply_text("<b>Submission not saved</b>\n\nAll three damage values must be whole numbers.", parse_mode="html")
-        return
-    payload["is_starter"] = payload["starter_origin"].lower() in {"enhanced", "tech", "mystic"}
-    payload["status"] = "draft"
-    submission_id = add_submission("hero", payload["name"], payload, str(user_id))
-    await message.reply_text(
-        f"<b>Hero submitted → pending</b>\n\n{payload['name']}\nSubmission ID → <code>{submission_id}</code>\n\nThe owner must approve it from /owner.",
-        parse_mode="html",
-    )
-    await log_event(client, "New hero", f"Hero submitted → {payload['name']}", user_id)
-
-
-async def submitvillain_command(client, message):
-    user_id = message.from_user.id
-    if not can(user_id, "manage_enemies"):
-        return
-    raw = (message.text or "").split(maxsplit=1)
-    if len(raw) < 2:
-        await message.reply_text(
-            "<b>Enemy and villain submission</b>\n\n"
-            "/submitvillain key | Name | EnemyType | Faction | HP | Attack | Signature | Ultimate | NemesisHeroKey | RightsStatus\n\n"
-            "EnemyType → normal, villain, or event_boss.\n"
-            "NemesisHeroKey → hero key or None.",
-            parse_mode="html",
-        )
-        return
-    fields = [field.strip() for field in raw[1].split("|")]
-    if len(fields) != 10:
-        await message.reply_text("<b>Submission not saved</b>\n\nUse exactly 10 fields separated by |.", parse_mode="html")
-        return
-    keys = ["villain_key", "name", "enemy_type", "faction", "hp", "attack", "ability_signature", "ability_ultimate", "nemesis_hero_key", "rights_status"]
-    payload = dict(zip(keys, fields))
-    payload["villain_key"] = payload["villain_key"].lower().replace(" ", "_")
-    try:
-        payload["hp"] = int(payload["hp"])
-        payload["attack"] = int(payload["attack"])
-    except ValueError:
-        await message.reply_text("<b>Submission not saved</b>\n\nHP and Attack must be whole numbers.", parse_mode="html")
-        return
-    payload["nemesis_for"] = [] if payload["nemesis_hero_key"].lower() == "none" else [payload["nemesis_hero_key"].lower().replace(" ", "_")]
-    payload["status"] = "draft"
-    submission_id = add_submission("villain", payload["name"], payload, str(user_id))
-    await message.reply_text(
-        f"<b>Enemy submitted → pending</b>\n\n{payload['name']}\nType → {payload['enemy_type']}\nSubmission ID → <code>{submission_id}</code>",
-        parse_mode="html",
-    )
-    await log_event(client, "New villain", f"{payload['name']} → {payload['enemy_type']}", user_id)
 
 
 async def submitevent_command(client, message):
@@ -290,9 +215,11 @@ async def adminhelp_command(client, message):
         "/owner → open control panel\n"
         "Reply to a user + /addmod → grant exact permissions\n"
         "/pending → review queue\n"
-        "/submithero → submit a hero\n"
-        "/submitvillain → submit a normal enemy, villain, or event boss\n"
+        "/submithero → guided hero creation\n"
+        "/submitvillain → guided enemy or villain creation\n"
         "/submitevent → create a boss event\n"
+        "/test → simulate PvE damage without rewards\n"
+        "/cancel → cancel an active creation wizard\n"
         "/submitkind → submit a new content kind\n\n"
         "Hero moves include separate Signature, Utility, and Ultimate damage values.\n"
         "Set StarterOrigin to Enhanced, Tech, Mystic, or None.\n\n"
@@ -329,6 +256,27 @@ async def pending_command(client, message):
     await message.reply_text(text, parse_mode="html", reply_markup=pending_markup(items))
 
 
+async def test_command(client, message):
+    if not is_owner(message.from_user.id):
+        return
+    result = simulate_pve()
+    if not result["ok"]:
+        text = f"<b>PvE simulation unavailable</b>\n\n{result['reason']}"
+    else:
+        lines = "\n".join(f"{index + 1}. {line}" for index, line in enumerate(result["turns"]))
+        text = (
+            "<b>Owner test · PvE simulation</b>\n\n"
+            f"Hero → <b>{result['hero']}</b>\n"
+            f"Enemy → <b>{result['enemy']}</b>\n"
+            f"Starting HP → {result['hero_hp']} / {result['enemy_hp']}\n\n"
+            f"{lines}\n\n"
+            f"Result → <b>{result['result']}</b>\n"
+            "<i>No player data, rewards, or live battle records were changed.</i>"
+        )
+    await message.reply_text(text, parse_mode="html", reply_markup=owner_panel_markup())
+    await log_event(client, "Owner test", "Deterministic PvE simulation executed", message.from_user.id)
+
+
 async def admin_callback(client, callback_query):
     data = callback_query.data or ""
     if not data.startswith("admin:") or not is_owner(callback_query.from_user.id):
@@ -343,7 +291,7 @@ async def admin_callback(client, callback_query):
         await callback_query.message.edit_text(text, parse_mode="html", reply_markup=pending_markup(items) if items else owner_panel_markup())
     elif action[1] == "mods":
         mods = list_moderators()
-        text = "<b>Moderators</b>\n\n" + ("\n".join(f"· {mod.get('username') or mod['telegram_id']}  →  {', '.join(mod.get('permissions', [])) or 'no permissions'}" for mod in mods) if mods else "No moderators yet.")
+        text = "<b>Moderators</b>\n\n" + ("\n".join(f"· {mod.get('first_name') or 'Moderator'} · <code>{mod['telegram_id']}</code>\n  {', '.join(mod.get('permissions', [])) or 'no permissions'}" for mod in mods) if mods else "No moderators yet.")
         await callback_query.message.edit_text(text, parse_mode="html", reply_markup=owner_panel_markup())
     elif action[1] == "perm":
         target_id = int(action[2])
@@ -357,9 +305,10 @@ async def admin_callback(client, callback_query):
     elif action[1] == "save_mod":
         target_id = int(action[2])
         selected = sorted(pending_mod_permissions.get(callback_query.from_user.id, set()))
-        upsert_moderator(target_id, "", selected)
+        first_name = pending_mod_names.get(callback_query.from_user.id, "Moderator")
+        upsert_moderator(target_id, first_name, selected)
         await callback_query.message.edit_text(
-            f"<b>Moderator saved</b>\n\nUser → <code>{target_id}</code>\nPermissions → {', '.join(selected) or 'none'}",
+            f"<b>Moderator saved</b>\n\nName → {first_name}\nID → <code>{target_id}</code>\nPermissions → {', '.join(selected) or 'none'}",
             parse_mode="html",
             reply_markup=owner_panel_markup(),
         )
@@ -403,8 +352,9 @@ async def admin_callback(client, callback_query):
     elif action[1] == "hero_guide":
         await callback_query.message.edit_text(
             "<b>Hero guide</b>\n\n"
-            "Submit with /submithero and 18 pipe-separated fields.\n"
-            "Required → identity, source, universe, role, three named moves, three damage values, rights status, and StarterOrigin.\n"
+            "Send /submithero to begin.\n"
+            "The bot asks one question at a time and shows buttons for fixed choices.\n"
+            "You will preview the hero and image before submitting it.\n"
             "Original or licensed only → owner approval before publish.",
             parse_mode="html",
             reply_markup=owner_panel_markup(),
@@ -412,7 +362,7 @@ async def admin_callback(client, callback_query):
     elif action[1] == "enemy_guide":
         await callback_query.message.edit_text(
             "<b>Enemy guide</b>\n\n"
-            "/submitvillain key | Name | EnemyType | Faction | HP | Attack | Signature | Ultimate | NemesisHeroKey | RightsStatus\n\n"
+            "Send /submitvillain to begin the guided process.\n\n"
             "normal → repeatable PvE\nvillain → boss/Rift PvE\nevent_boss → event encounter",
             parse_mode="html",
             reply_markup=owner_panel_markup(),
@@ -442,11 +392,11 @@ async def admin_callback(client, callback_query):
 def register(client) -> None:
     client.add_handler(MessageHandler(owner_command, filters.command("owner")))
     client.add_handler(MessageHandler(addmod_command, filters.command("addmod")))
-    client.add_handler(MessageHandler(submithero_command, filters.command("submithero")))
-    client.add_handler(MessageHandler(submitvillain_command, filters.command("submitvillain")))
     client.add_handler(MessageHandler(submitevent_command, filters.command("submitevent")))
     client.add_handler(MessageHandler(submitkind_command, filters.command("submitkind")))
     client.add_handler(MessageHandler(adminhelp_command, filters.command("adminhelp")))
     client.add_handler(MessageHandler(guideadmin_command, filters.command("guideadmin")))
     client.add_handler(MessageHandler(pending_command, filters.command("pending")))
-    client.add_handler(CallbackQueryHandler(admin_callback))
+    client.add_handler(MessageHandler(test_command, filters.command("test")))
+    client.add_handler(CallbackQueryHandler(admin_callback, filters.regex(r"^admin:")))
+    register_content_wizard(client)

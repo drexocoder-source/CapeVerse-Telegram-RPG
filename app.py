@@ -15,14 +15,16 @@ def create_bot() -> Client | None:
     api_hash = os.getenv("API_HASH", "")
     if not bot_token or not api_id or not api_hash:
         return None
-    original_parse = Parser.parse
+    if not getattr(Parser.parse, "_capeverse_compat", False):
+        original_parse = Parser.parse
 
-    async def parse_compat(parser, text, mode=None):
-        if isinstance(mode, str) and mode.lower() == "html":
-            mode = ParseMode.HTML
-        return await original_parse(parser, text, mode)
+        async def parse_compat(parser, text, mode=None):
+            if isinstance(mode, str) and mode.lower() == "html":
+                mode = ParseMode.HTML
+            return await original_parse(parser, text, mode)
 
-    Parser.parse = parse_compat
+        parse_compat._capeverse_compat = True
+        Parser.parse = parse_compat
     client = Client(
         "capeverse_bot",
         api_id=int(api_id),

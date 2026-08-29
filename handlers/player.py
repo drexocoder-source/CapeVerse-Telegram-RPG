@@ -35,6 +35,107 @@ ORIGINS = {
     "mystic": ("Mystic", "Ember Memory"),
 }
 
+GUIDE_TOPICS = {
+    "start": (
+        "Getting started",
+        "<b>Getting started</b>\n\n"
+        "/start creates your player record.\n"
+        "Choose Enhanced, Tech, or Mystic → receive that Origin’s published starter hero.\n"
+        "Your Telegram first name is shown; your numeric Telegram ID keeps the account unique.",
+    ),
+    "currency": (
+        "Currencies",
+        "<b>Currencies</b>\n\n"
+        "Cape Credits → relic forging and progression\n"
+        "Signal Shards → Recruitment Beacon pulls\n"
+        "Prism Cores → premium-event currency reserved for future systems\n"
+        "Patrol Intel → Case Files and mission choices\n"
+        "Signal Boost → increases until a high-rarity Beacon result is guaranteed",
+    ),
+    "commands": (
+        "Commands",
+        "<b>Player commands</b>\n\n"
+        "/start → create or reopen your account\n"
+        "/main or /menu → open the main game menu\n"
+        "/profile → generate your profile card\n"
+        "/guide → open this guide center\n"
+        "/help → open the main menu",
+    ),
+    "heroes": (
+        "Heroes and teams",
+        "<b>Heroes and teams</b>\n\n"
+        "Heroes are published by the owner and grouped by universe, place, faction, role, rarity, and alignment.\n"
+        "A team holds up to three owned heroes. Duplicate pulls increase star progress.\n"
+        "Starter heroes are assigned by Origin only when the owner marks them as starters.",
+    ),
+    "combat": (
+        "Combat",
+        "<b>Combat</b>\n\n"
+        "Signature → reliable character damage\n"
+        "Utility → lower damage but reduces the incoming counterattack\n"
+        "Ultimate → highest standard damage\n"
+        "Nemesis Ultimate → appears only against a linked villain\n\n"
+        "All move names and damage values come from the published character.",
+    ),
+    "pve": (
+        "PvE and Rift",
+        "<b>PvE and Rift</b>\n\n"
+        "Normal enemies → repeatable street operations\n"
+        "Villains → stronger hunts and Rift encounters\n"
+        "Rift victories increase your floor. Battles award Cape Credits when completed.",
+    ),
+    "events": (
+        "Events",
+        "<b>Events</b>\n\n"
+        "The owner publishes an event boss first, then links that boss to an event.\n"
+        "Players receive a limited boss encounter and the event’s configured Cape Credit reward.",
+    ),
+    "relics": (
+        "Relics",
+        "<b>Relics</b>\n\n"
+        "Spend 100 Cape Credits to forge one relic.\n"
+        "Relics have a slot, set, rarity, base stat, and substat.\n"
+        "They remain in your permanent inventory.",
+    ),
+    "admin": (
+        "Owner and admin",
+        "<b>Owner and admin guide</b>\n\n"
+        "/owner → owner tools\n"
+        "/submithero → guided hero creation\n"
+        "/submitvillain → guided enemy creation\n"
+        "/submitevent → event submission\n"
+        "/pending → approval queue\n"
+        "/test → safe PvE simulation\n"
+        "/cancel → cancel an active content wizard",
+    ),
+}
+
+
+def guide_menu_markup() -> InlineKeyboardMarkup:
+    keys = list(GUIDE_TOPICS)
+    rows = []
+    for index in range(0, len(keys), 2):
+        rows.append([
+            InlineKeyboardButton(GUIDE_TOPICS[key][0], callback_data=f"guide:{key}")
+            for key in keys[index:index + 2]
+        ])
+    rows.append([InlineKeyboardButton("Complete PDF guide →", callback_data="guide:pdf")])
+    rows.append([InlineKeyboardButton("← Main menu", callback_data="menu:home")])
+    return InlineKeyboardMarkup(rows)
+
+
+async def send_guide_menu(message, edit: bool = False) -> None:
+    text = (
+        "<b>CapeVerse Guide Center</b>\n\n"
+        "Choose a guide →\n"
+        "Each section explains one part of the game.\n"
+        "Use the PDF for the complete handbook."
+    )
+    if edit:
+        await message.edit_text(text, parse_mode="html", reply_markup=guide_menu_markup())
+    else:
+        await message.reply_text(text, parse_mode="html", reply_markup=guide_menu_markup())
+
 
 def _player(message):
     return get_or_create_user(
@@ -78,12 +179,23 @@ def _battle_markup(
 
 def _battle_text(battle: dict, enemy_name: str | None = None) -> str:
     latest = battle.get("log", [])[-1:] if battle else []
-    log_line = f"\n\n<i>{latest[0]}</i>" if latest else ""
+    log_line = f"\n\n<blockquote>{latest[0]}</blockquote>" if latest else ""
+    enemy_hp = int(battle.get("enemy_hp", 0))
+    enemy_max = max(1, int(battle.get("enemy_max_hp", enemy_hp or 100)))
+    player_hp = int(battle.get("player_hp", 0))
+    player_max = max(1, int(battle.get("player_max_hp", 100)))
+
+    def bar(current: int, maximum: int) -> str:
+        filled = max(0, min(10, round((current / maximum) * 10)))
+        return "▰" * filled + "▱" * (10 - filled)
+
     return (
-        f"<b>{battle.get('stage', 'Battle')}</b>\n"
-        f"{enemy_name or battle.get('enemy_name', 'Threat')}  →  HP {battle.get('enemy_hp', 0)}\n"
-        f"{battle.get('actor_name', 'Your hero')} →  HP {battle.get('player_hp', 0)}\n"
-        f"Turn {battle.get('turn', 1)}  →  choose an action{log_line}"
+        f"<b>{battle.get('stage', 'Battle')}</b>\n\n"
+        f"<b>{enemy_name or battle.get('enemy_name', 'Threat')}</b>\n"
+        f"{bar(enemy_hp, enemy_max)}  {enemy_hp}/{enemy_max} HP\n\n"
+        f"<b>{battle.get('actor_name', 'Your hero')}</b>\n"
+        f"{bar(player_hp, player_max)}  {player_hp}/{player_max} HP\n\n"
+        f"Turn {battle.get('turn', 1)} → choose a move{log_line}"
     )
 
 
@@ -140,7 +252,7 @@ async def start_command(client, message):
 
 async def guide_command(client, message):
     _player(message)
-    await send_guide(message)
+    await send_guide_menu(message)
 
 
 async def menu_command(client, message):
@@ -159,7 +271,7 @@ async def profile_command(client, message):
 
 async def callback_handler(client, callback_query):
     data = callback_query.data or ""
-    if data.startswith("admin:"):
+    if data.startswith(("admin:", "wizard:")):
         return
     user_id = callback_query.from_user.id
     await callback_query.answer()
@@ -203,6 +315,15 @@ async def callback_handler(client, callback_query):
         return
 
     if data == "menu:home":
+        if getattr(callback_query.message, "photo", None):
+            await callback_query.message.delete()
+            await client.send_message(
+                callback_query.message.chat.id,
+                "<b>CapeVerse</b>\n\nChoose your next move →",
+                parse_mode="html",
+                reply_markup=main_menu_markup(),
+            )
+            return
         await callback_query.message.edit_text(
             "<b>CapeVerse</b>\n\nChoose your next move →",
             parse_mode="html",
@@ -213,7 +334,24 @@ async def callback_handler(client, callback_query):
         await show_profile(callback_query.message, edit=True, telegram_id=user_id)
         return
     if data == "menu:guide":
+        await send_guide_menu(callback_query.message, edit=True)
+        return
+    if data == "guide:pdf":
         await send_guide(callback_query.message)
+        return
+    if data.startswith("guide:"):
+        topic = data.split(":", 1)[1]
+        entry = GUIDE_TOPICS.get(topic)
+        if not entry:
+            return
+        await callback_query.message.edit_text(
+            entry[1],
+            parse_mode="html",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("← All guides", callback_data="menu:guide")],
+                [InlineKeyboardButton("Main menu", callback_data="menu:home")],
+            ]),
+        )
         return
     if data == "menu:heroes":
         heroes = list_owned_heroes(user_id)
@@ -347,7 +485,9 @@ async def callback_handler(client, callback_query):
         battle = {
             "stage": stage,
             "enemy_hp": battle_info["enemy_hp"],
+            "enemy_max_hp": battle_info["enemy_hp"],
             "player_hp": 100,
+            "player_max_hp": 100,
             "turn": 1,
             "actor_name": battle_info["actor_name"],
         }
@@ -367,7 +507,7 @@ async def callback_handler(client, callback_query):
         if not battle_info["ok"]:
             await callback_query.message.edit_text(f"<b>Arena unavailable</b>\n\n{battle_info['reason']}", parse_mode="html", reply_markup=back_markup())
             return
-        battle = {"stage": "Sanctioned Bout", "enemy_hp": battle_info["enemy_hp"], "player_hp": 100, "turn": 1}
+        battle = {"stage": "Sanctioned Bout", "enemy_hp": battle_info["enemy_hp"], "enemy_max_hp": battle_info["enemy_hp"], "player_hp": 100, "player_max_hp": 100, "turn": 1}
         battle["actor_name"] = battle_info["actor_name"]
         await callback_query.message.edit_text(_battle_text(battle, battle_info["enemy_name"]), parse_mode="html", reply_markup=_battle_markup(battle_info["id"], mode="arena", move_names=battle_info["move_names"]))
         return
@@ -378,7 +518,7 @@ async def callback_handler(client, callback_query):
         if not battle_info["ok"]:
             await callback_query.message.edit_text(f"<b>The Rift is unavailable</b>\n\n{battle_info['reason']}", parse_mode="html", reply_markup=back_markup())
             return
-        battle = {"stage": f"The Rift · Floor {floor}", "enemy_hp": battle_info["enemy_hp"], "player_hp": 100, "turn": 1}
+        battle = {"stage": f"The Rift · Floor {floor}", "enemy_hp": battle_info["enemy_hp"], "enemy_max_hp": battle_info["enemy_hp"], "player_hp": 100, "player_max_hp": 100, "turn": 1}
         battle["actor_name"] = battle_info["actor_name"]
         await callback_query.message.edit_text(_battle_text(battle, battle_info["enemy_name"]), parse_mode="html", reply_markup=_battle_markup(battle_info["id"], mode="rift", move_names=battle_info["move_names"], nemesis_available=battle_info["nemesis_available"]))
         return
@@ -405,7 +545,9 @@ async def callback_handler(client, callback_query):
         battle = {
             "stage": "Event Boss",
             "enemy_hp": battle_info["enemy_hp"],
+            "enemy_max_hp": battle_info["enemy_hp"],
             "player_hp": 100,
+            "player_max_hp": 100,
             "turn": 1,
             "actor_name": battle_info["actor_name"],
         }
@@ -427,7 +569,7 @@ async def callback_handler(client, callback_query):
             await callback_query.message.edit_text("<b>Battle expired</b>\n\nReturn to the menu and start a new encounter →", parse_mode="html", reply_markup=back_markup())
             return
         finished = battle["status"] != "active"
-        result_line = "\n\n<b>Victory → reward pending</b>" if battle["status"] == "won" else "\n\n<b>Defeat → regroup and try again</b>" if battle["status"] == "lost" else ""
+        result_line = "\n\n<b>Victory → reward granted</b>" if battle["status"] == "won" else "\n\n<b>Defeat → regroup and try again</b>" if battle["status"] == "lost" else ""
         await callback_query.message.edit_text(
             _battle_text(battle) + result_line,
             parse_mode="html",
@@ -446,6 +588,6 @@ async def callback_handler(client, callback_query):
 def register(client) -> None:
     client.add_handler(MessageHandler(start_command, filters.command("start")))
     client.add_handler(MessageHandler(guide_command, filters.command("guide")))
-    client.add_handler(MessageHandler(menu_command, filters.command(["menu", "help"])))
+    client.add_handler(MessageHandler(menu_command, filters.command(["main", "menu", "help"])))
     client.add_handler(MessageHandler(profile_command, filters.command("profile")))
     client.add_handler(CallbackQueryHandler(callback_handler))

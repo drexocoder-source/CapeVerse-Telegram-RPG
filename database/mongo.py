@@ -47,6 +47,7 @@ def init_db() -> None:
     database.villains.create_index([("enemy_type", ASCENDING), ("status", ASCENDING)])
     database.events.create_index([("event_key", ASCENDING)], unique=True)
     database.events.create_index([("status", ASCENDING)])
+    database.content_wizards.create_index([("telegram_id", ASCENDING)], unique=True)
     remove_default_seed_content()
 
 
@@ -280,6 +281,39 @@ def list_submissions(status: str = "pending") -> list[dict[str, Any]]:
     return list(collection("content_submissions").find({"status": status}).sort("created_at", DESCENDING))
 
 
+def get_content_wizard(telegram_id: int) -> dict[str, Any] | None:
+    return collection("content_wizards").find_one({"telegram_id": telegram_id})
+
+
+def save_content_wizard(
+    telegram_id: int,
+    kind: str,
+    step: int,
+    payload: dict[str, Any],
+    first_name: str = "",
+) -> dict[str, Any]:
+    collection("content_wizards").update_one(
+        {"telegram_id": telegram_id},
+        {
+            "$set": {
+                "telegram_id": telegram_id,
+                "kind": kind,
+                "step": step,
+                "payload": payload,
+                "first_name": first_name,
+                "updated_at": now(),
+            },
+            "$setOnInsert": {"created_at": now()},
+        },
+        upsert=True,
+    )
+    return get_content_wizard(telegram_id) or {}
+
+
+def delete_content_wizard(telegram_id: int) -> None:
+    collection("content_wizards").delete_one({"telegram_id": telegram_id})
+
+
 def review_submission(submission_id: str, status: str, reviewer: str, note: str = "") -> None:
     from bson import ObjectId
 
@@ -289,11 +323,11 @@ def review_submission(submission_id: str, status: str, reviewer: str, note: str 
     )
 
 
-def upsert_moderator(telegram_id: int, username: str, permissions: list[str]) -> None:
+def upsert_moderator(telegram_id: int, first_name: str, permissions: list[str]) -> None:
     collection("moderators").update_one(
         {"telegram_id": telegram_id},
         {
-            "$set": {"username": username, "permissions": permissions, "active": True, "updated_at": now()},
+            "$set": {"first_name": first_name, "permissions": permissions, "active": True, "updated_at": now()},
             "$setOnInsert": {"telegram_id": telegram_id, "created_at": now()},
         },
         upsert=True,
