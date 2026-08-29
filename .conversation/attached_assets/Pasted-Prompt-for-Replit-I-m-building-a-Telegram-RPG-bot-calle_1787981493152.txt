@@ -1,0 +1,24 @@
+Prompt for Replit
+I'm building a Telegram RPG bot called CapeVerse — a superhero collection/battle game (think gacha-RPG mechanics, similar in spirit to bots like Ordinal Legacy, but with an original superhero multiverse theme). I don't want you to write full code yet — first I want a project plan: architecture, tech stack, data model, and a phased build order I can review and adjust before we start building.
+Concept
+Players collect original superhero characters (not real Marvel/DC IP — original characters inspired by tech-hero, alien-survivor, mystic, bat-detective, Indian-mythology, etc. archetypes), build 3-hero teams, and battle through PvE and PvP content. Heroes belong to a "Universe" tag (Earth-Prime, Bhoomi-1, Capeverse-Original, Fringe Realities) and mixing universes on a team gives synergy bonuses.
+Core systems to plan for
+Onboarding — player picks one of 3 Origin paths (Enhanced / Tech / Mystic), which sets a starting hero + a permanent account-wide passive.
+Hero roster & progression — leveling, star-ups from duplicates, and an "Evolution" breakpoint at max level (new art, new ability, stat curve reset).
+Abilities — each hero has 3 abilities (Signature Move, Utility Power, Ultimate) plus a conditional "Nemesis Ultimate" if their bound rival villain is on the enemy team.
+Relics (gear) — equippable items with base stats + randomized substats, some belonging to 2/4-piece sets.
+Missions — idle "Patrol" income + short branching "Case Files" story missions tied to an Alignment system (Hero / Vigilante / Anti-Hero).
+Recruitment Beacon (gacha) — weighted pull banners with a visible "Signal Boost" meter that guarantees a pull at 100%.
+PvP Arena ("Sanctioned Bouts") — ladder, ideally with Alignment-locked sub-ladders later.
+PvE Tower ("The Rift") — vertical floor climb, each boss tied to a specific hero's Nemesis.
+Guilds ("Alliances") — shared "City Threat Level" meter the whole guild damages together.
+Trading — hero/currency trades between players, with a level/rarity-gated trade tax; relics are NOT tradeable.
+Events — seasonal content tied to a rotating "Fringe Realities" universe.
+What I need from you (Replit)
+Recommended tech stack for a Telegram bot with persistent game state, considering: hosting on Replit, ease of iteration, and reasonable scale for a few thousand concurrent players (e.g., Python + python-telegram-bot vs. Node.js + Telegraf/grammY, database choice — Postgres vs. SQLite vs. something else, and whether a lightweight web framework is needed for an admin/game-balance dashboard).
+Proposed database schema (tables/collections, relationships) for: Users, Heroes, UserHero (owned instances), Relics, RelicInstances, Teams, Alliances, Trades, Events. Flag anything you'd change or simplify from this list.
+Bot command/menu structure — how the Telegram UX should be organized (slash commands vs. inline keyboards vs. a mix), keeping in mind most actions (team building, shop, missions) need to work well as inline button flows, not typed commands.
+Architecture diagram/description — how the bot process, database, and any scheduled jobs (idle income ticks, event rotation, pity/signal-boost resets) fit together.
+A phased build order, starting from a minimal playable loop (pick origin → get starter hero → fight one battle) and layering in systems in this priority order: Recruitment Beacon + Relics → Missions/Districts → Arena → The Rift + Nemesis → Alliances → Trading/Events → Evolution + Secret Identity idle layer.
+Open questions or risks you see in this plan before we start coding — e.g., anything about Telegram bot API limits, state management for turn-based battles in a chat interface, or data model choices that could bite us later.
+Please respond with the plan only — no code yet. Once I review it, I'll tell you which phase to start building.
