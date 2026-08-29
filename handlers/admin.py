@@ -16,6 +16,7 @@ from database.mongo import (
     seed_hero,
     upsert_moderator,
 )
+from utils.audit import log_event
 
 
 OWNER_ID = int(os.getenv("OWNER_TELEGRAM_ID", "0") or 0)
@@ -108,6 +109,7 @@ async def owner_command(client, message):
         parse_mode="html",
         reply_markup=owner_panel_markup(),
     )
+    await log_event(client, "Owner verification", "Owner panel opened", message.from_user.id)
 
 
 async def addmod_command(client, message):
@@ -131,6 +133,7 @@ async def addmod_command(client, message):
         parse_mode="html",
         reply_markup=permission_markup(target_id, set()),
     )
+    await log_event(client, "Admin access", f"Moderator permission editor opened for {target_id}", target_id)
 
 
 async def submithero_command(client, message):
@@ -160,6 +163,7 @@ async def submithero_command(client, message):
         f"<b>Hero submitted → pending</b>\n\n{payload['name']}\nSubmission ID → <code>{submission_id}</code>\n\nThe owner must approve it from /owner.",
         parse_mode="html",
     )
+    await log_event(client, "New hero", f"Hero submitted → {payload['name']}", user_id)
 
 
 async def submitkind_command(client, message):
@@ -182,6 +186,7 @@ async def submitkind_command(client, message):
     kind, title, definition = parts
     add_submission(kind, title, {"details": definition}, str(user_id))
     await message.reply_text(f"<b>Content queued → {kind}</b>\n\n{title}\nOwner review is required.", parse_mode="html")
+    await log_event(client, "New content", f"{kind} submitted → {title}", user_id)
 
 
 async def adminhelp_command(client, message):
@@ -206,6 +211,7 @@ async def adminhelp_command(client, message):
         "Use /guideadmin to receive the full checklist.",
         parse_mode="html",
     )
+    await log_event(client, "Admin verification", "Admin guide requested", message.from_user.id)
 
 
 async def guideadmin_command(client, message):

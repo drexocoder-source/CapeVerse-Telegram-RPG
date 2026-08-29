@@ -7,6 +7,7 @@ from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from database.mongo import (
     add_hero_to_player,
     get_or_create_user,
+    get_or_create_user_with_status,
     get_profile,
     get_team,
     list_owned_heroes,
@@ -23,6 +24,7 @@ from plugins.recruitment import pull
 from plugins.rift import start_rift
 from utils.formatting import back_markup, main_menu_markup, origin_markup, profile_text, rarity_mark
 from utils.profile_card import generate_profile_card
+from utils.audit import log_event
 
 
 ORIGINS = {
@@ -96,7 +98,13 @@ async def show_profile(message, edit: bool = False, telegram_id: int | None = No
 
 
 async def start_command(client, message):
-    profile = _player(message)
+    profile, created = get_or_create_user_with_status(
+        message.from_user.id,
+        getattr(message.from_user, "username", "") or "",
+        getattr(message.from_user, "first_name", "") or "",
+    )
+    if created:
+        await log_event(client, "New user", "Player started CapeVerse", message.from_user.id)
     if profile.get("origin"):
         await message.reply_text(
             "<b>CapeVerse</b>\n\nYour signal is active.\nChoose your next move →",

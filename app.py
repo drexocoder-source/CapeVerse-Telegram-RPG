@@ -1,6 +1,8 @@
 import os
 
 from pyrogram import Client
+from pyrogram.enums import ParseMode
+from pyrogram.parser.parser import Parser
 
 from database.mongo import init_db
 from handlers.admin import register as register_admin
@@ -13,6 +15,14 @@ def create_bot() -> Client | None:
     api_hash = os.getenv("API_HASH", "")
     if not bot_token or not api_id or not api_hash:
         return None
+    original_parse = Parser.parse
+
+    async def parse_compat(parser, text, mode=None):
+        if isinstance(mode, str) and mode.lower() == "html":
+            mode = ParseMode.HTML
+        return await original_parse(parser, text, mode)
+
+    Parser.parse = parse_compat
     client = Client(
         "capeverse_bot",
         api_id=int(api_id),

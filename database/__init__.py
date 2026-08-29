@@ -2,6 +2,7 @@ from .mongo import (
     add_hero_to_player,
     create_battle,
     get_or_create_user,
+    get_or_create_user_with_status,
     get_profile,
     get_team,
     get_hero,

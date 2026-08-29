@@ -47,7 +47,19 @@ def init_db() -> None:
 
 
 def get_or_create_user(telegram_id: int, username: str = "", first_name: str = "") -> dict[str, Any]:
+    user, _ = get_or_create_user_with_status(telegram_id, username, first_name)
+    return user
+
+
+def get_or_create_user_with_status(telegram_id: int, username: str = "", first_name: str = "") -> tuple[dict[str, Any], bool]:
     users = collection("users")
+    existing = users.find_one({"telegram_id": telegram_id})
+    if existing:
+        users.update_one(
+            {"telegram_id": telegram_id},
+            {"$set": {"username": username or "", "first_name": first_name or "", "last_seen_at": now()}},
+        )
+        return users.find_one({"telegram_id": telegram_id}) or existing, False
     users.update_one(
         {"telegram_id": telegram_id},
         {
@@ -74,7 +86,7 @@ def get_or_create_user(telegram_id: int, username: str = "", first_name: str = "
         },
         upsert=True,
     )
-    return users.find_one({"telegram_id": telegram_id}) or {}
+    return users.find_one({"telegram_id": telegram_id}) or {}, True
 
 
 def get_profile(telegram_id: int) -> dict[str, Any] | None:
