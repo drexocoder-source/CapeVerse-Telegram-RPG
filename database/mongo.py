@@ -93,6 +93,8 @@ def get_or_create_user_with_status(telegram_id: int, username: str = "", first_n
                 "guide_sent": False,
                 "xp": 0,
                 "level": 1,
+                "pvp_wins": 0,
+                "pvp_losses": 0,
                 "created_at": now(),
             },
         },
@@ -122,6 +124,8 @@ def update_player(telegram_id: int, **fields: Any) -> dict[str, Any] | None:
         "guide_sent",
         "xp",
         "level",
+        "pvp_wins",
+        "pvp_losses",
     }
     clean = {key: value for key, value in fields.items() if key in allowed}
     if clean:
@@ -486,17 +490,67 @@ def get_battle(telegram_id: int, battle_id: str) -> dict[str, Any] | None:
         return None
 
 
+def get_battle_for_player(telegram_id: int, battle_id: str) -> dict[str, Any] | None:
+    from bson import ObjectId
+
+    try:
+        return collection("battles").find_one({
+            "_id": ObjectId(battle_id),
+            "$or": [{"telegram_id": telegram_id}, {"opponent_telegram_id": telegram_id}],
+        })
+    except Exception:
+        return None
+
+
 def update_battle(battle_id: str, **fields: Any) -> dict[str, Any] | None:
     from bson import ObjectId
 
     clean = {
         key: value for key, value in fields.items()
-        if key in {"status", "turn", "player_hp", "enemy_hp", "log", "cooldowns"}
+        if key in {
+            "status", "turn", "player_hp", "enemy_hp", "log", "cooldowns",
+            "expires_at", "current_turn_id", "last_action_by",
+        }
     }
     clean["updated_at"] = now()
     try:
         collection("battles").update_one({"_id": ObjectId(battle_id)}, {"$set": clean})
         return collection("battles").find_one({"_id": ObjectId(battle_id)})
+    except Exception:
+        return None
+
+
+def create_challenge(challenger_id: int, challenged_id: int) -> str:
+    result = collection("pvp_challenges").insert_one({
+        "challenger_id": challenger_id,
+        "challenged_id": challenged_id,
+        "status": "pending",
+        "created_at": now(),
+        "updated_at": now(),
+    })
+    return str(result.inserted_id)
+
+
+def get_challenge(challenge_id: str) -> dict[str, Any] | None:
+    from bson import ObjectId
+
+    try:
+        return collection("pvp_challenges").find_one({"_id": ObjectId(challenge_id)})
+    except Exception:
+        return None
+
+
+def update_challenge(challenge_id: str, **fields: Any) -> dict[str, Any] | None:
+    from bson import ObjectId
+
+    clean = {
+        key: value for key, value in fields.items()
+        if key in {"status", "battle_id"}
+    }
+    clean["updated_at"] = now()
+    try:
+        collection("pvp_challenges").update_one({"_id": ObjectId(challenge_id)}, {"$set": clean})
+        return collection("pvp_challenges").find_one({"_id": ObjectId(challenge_id)})
     except Exception:
         return None
 
