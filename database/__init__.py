@@ -1,9 +1,10 @@
-from .sqlite import (
+from .mongo import (
     add_hero_to_player,
     create_battle,
     get_or_create_user,
     get_profile,
     get_team,
+    get_hero,
     init_db,
     list_heroes,
     list_owned_heroes,
@@ -18,6 +19,7 @@ __all__ = [
     "get_or_create_user",
     "get_profile",
     "get_team",
+    "get_hero",
     "init_db",
     "list_heroes",
     "list_owned_heroes",

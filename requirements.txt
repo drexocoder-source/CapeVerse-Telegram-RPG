@@ -2,3 +2,8 @@ Flask>=3.1.0
 Kurigram>=2.2.25
 reportlab>=4.2.0
 gunicorn>=23.0.0
+flask
+gunicorn
+kurigram
+pymongo
+reportlab
