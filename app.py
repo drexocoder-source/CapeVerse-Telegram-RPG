@@ -65,6 +65,7 @@ def run_bot() -> None:
                     BotCommand("challenge", "Reply to a player to challenge them"),
                     BotCommand("profile", "Generate your player dossier"),
                     BotCommand("char", "Search the global character codex"),
+                    BotCommand("villain", "Search the villain codex"),
                     BotCommand("mychar", "View one of your owned characters"),
                     BotCommand("daily", "Claim the daily signal reward"),
                     BotCommand("weekly", "Claim the weekly signal reward"),

@@ -2,6 +2,7 @@
 
 import json
 import os
+import urllib.error
 import urllib.request
 from typing import Any
 
@@ -107,7 +108,15 @@ def generate_character_blueprint(
             payload = json.loads(response.read().decode("utf-8"))
         text = payload["choices"][0]["message"]["content"]
         result = _extract_json(text)
-    except Exception:
+    except urllib.error.HTTPError as exc:
+        try:
+            detail = exc.read().decode("utf-8", errors="replace")[:500]
+        except Exception:
+            detail = ""
+        print(f"CapeVerse AI HTTP error {exc.code}: {detail}", flush=True)
+        return None
+    except Exception as exc:
+        print(f"CapeVerse AI error {type(exc).__name__}: {exc}", flush=True)
         return None
     if not result:
         return None

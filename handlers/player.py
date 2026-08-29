@@ -25,6 +25,7 @@ from database.mongo import (
     list_owned_heroes,
     list_relics,
     list_teams,
+    list_villains,
     rename_team,
     research_character,
     save_team,
@@ -370,33 +371,47 @@ def _find_character(query: str, telegram_id: int) -> tuple[dict | None, dict | N
 
 
 def _character_list_markup(telegram_id: int) -> InlineKeyboardMarkup:
-    heroes = list_owned_heroes(telegram_id)[:12]
-    rows = []
-    for index in range(0, len(heroes), 2):
-        rows.append([
-            InlineKeyboardButton(
-                f"{hero.get('name', 'Hero')[:18]} · Lv {hero.get('level', 1)}",
-                callback_data=f"mychar:view:{hero['hero_key']}",
-            )
-            for hero in heroes[index:index + 2]
-        ])
-    rows.append([InlineKeyboardButton("← Main menu", callback_data="menu:home")])
-    return InlineKeyboardMarkup(rows)
+    return back_markup()
 
 
 def _global_character_markup() -> InlineKeyboardMarkup:
-    heroes = list_heroes()[:12]
-    rows = []
-    for index in range(0, len(heroes), 2):
-        rows.append([
-            InlineKeyboardButton(
-                f"{rarity_mark(hero.get('rarity', 'Common'))} {hero.get('name', 'Character')[:18]}",
-                callback_data=f"char:view:{hero['hero_key']}",
-            )
-            for hero in heroes[index:index + 2]
-        ])
-    rows.append([InlineKeyboardButton("← Main menu", callback_data="menu:home")])
-    return InlineKeyboardMarkup(rows)
+    return back_markup()
+
+
+def _find_villain(query: str) -> dict | None:
+    query_lower = query.strip().lower()
+    for villain in list_villains():
+        fields = {str(villain.get(key, "")).lower() for key in ("villain_key", "name")}
+        if query_lower in fields or any(query_lower in field for field in fields):
+            return villain
+    return None
+
+
+def _villain_detail_text(villain: dict) -> str:
+    move_lines = []
+    for category in ("normal", "defense", "special"):
+        moves = (villain.get("move_sets") or {}).get(category, [])
+        if moves:
+            move_lines.append(f"\n<b>{category.title()} moves</b>")
+            for move in moves:
+                move_lines.append(
+                    f"· {escape(str(move.get('name', 'Move')))} · Damage {int(move.get('damage', 0))} "
+                    f"· Lv {int(move.get('unlock_level', 1))} · CD {int(move.get('cooldown', 0))}\n"
+                    f"  {escape(str(move.get('description', ''))[:220])}"
+                )
+    moves_text = "\n".join(move_lines) or "\nNo structured moves published."
+    return (
+        f"<b>{escape(str(villain.get('name', 'Unknown villain')))}</b>\n"
+        f"{escape(str(villain.get('origin_type', 'Unknown type')))} · "
+        f"{escape(str(villain.get('rarity', 'Common')))} · {escape(str(villain.get('role', 'Enemy')))}\n"
+        f"Type → {escape(str(villain.get('enemy_type', 'normal')).replace('_', ' ').title())}\n"
+        f"Universe → {escape(str(villain.get('universe', 'Unknown')))}\n"
+        f"Faction → {escape(str(villain.get('faction', 'Independent')))}\n"
+        f"Level range → {int(villain.get('min_level', 1))}–{int(villain.get('max_level', 100))}\n"
+        f"Base HP → {int(villain.get('hp', 100))} · Attack → {int(villain.get('attack', 12))}\n\n"
+        f"{escape(str(villain.get('description', 'No story available.'))[:900])}\n"
+        f"{moves_text}"
+    )
 
 
 def _character_actions(
@@ -615,7 +630,7 @@ async def char_command(client, message):
     if len(parts) == 1:
         await message.reply_text(
             "<b>Global Character Codex</b>\n\n"
-            "Choose a published character or send:\n"
+            "Search for a published character:\n"
             "<code>/char character name</code>\n\n"
             "This shows global story, artwork, moves, and research/evolution information.",
             parse_mode="html",
@@ -629,12 +644,38 @@ async def char_command(client, message):
     await _send_global_character(message, hero, message.from_user.id)
 
 
+async def villain_command(client, message):
+    _player(message)
+    parts = (message.text or "").split(maxsplit=1)
+    if len(parts) == 1:
+        await message.reply_text(
+            "<b>Villain Codex</b>\n\nSearch by exact or partial name:\n"
+            "<code>/villain villain name</code>",
+            parse_mode="html",
+            reply_markup=back_markup(),
+        )
+        return
+    villain = _find_villain(parts[1])
+    if not villain:
+        await message.reply_text(
+            "<b>Villain not found</b>\n\nTry the villain’s name or database key.",
+            parse_mode="html",
+            reply_markup=back_markup(),
+        )
+        return
+    await message.reply_text(
+        _villain_detail_text(villain),
+        parse_mode="html",
+        reply_markup=back_markup("menu:battle", "← PvE"),
+    )
+
+
 async def mychar_command(client, message):
     _player(message)
     parts = (message.text or "").split(maxsplit=1)
     if len(parts) == 1:
         await message.reply_text(
-            "<b>My Characters</b>\n\nChoose your owned character or send:\n"
+            "<b>My Characters</b>\n\nSearch your collection:\n"
             "<code>/mychar character name</code>",
             parse_mode="html",
             reply_markup=_character_list_markup(message.from_user.id),
@@ -830,14 +871,14 @@ async def callback_handler(client, callback_query):
     if data in {"char:list", "mychar:list"}:
         await _edit_callback(
             callback_query.message,
-            "<b>My characters</b>\n\nChoose a character →",
+            "<b>My characters</b>\n\nSearch with <code>/mychar character name</code>.",
             _character_list_markup(user_id),
         )
         return
     if data == "char:global":
         await _edit_callback(
             callback_query.message,
-            "<b>Global Character Codex</b>\n\nChoose a published character →",
+            "<b>Global Character Codex</b>\n\nSearch with <code>/char character name</code>.",
             _global_character_markup(),
         )
         return
@@ -1406,6 +1447,7 @@ def register(client) -> None:
     client.add_handler(MessageHandler(menu_command, filters.command(["main", "menu", "help"])))
     client.add_handler(MessageHandler(profile_command, filters.command("profile")))
     client.add_handler(MessageHandler(char_command, filters.command("char")))
+    client.add_handler(MessageHandler(villain_command, filters.command(["villain", "villains"])))
     client.add_handler(MessageHandler(mychar_command, filters.command("mychar")))
     client.add_handler(MessageHandler(inventory_command, filters.command("inventory")))
     client.add_handler(MessageHandler(team_command, filters.command(["team", "teams"])))

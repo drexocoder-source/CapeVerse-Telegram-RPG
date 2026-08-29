@@ -34,7 +34,7 @@ OPTIONS = {
     "universe": ["MCU", "DCU", "Bhoomi-1", "CapeVerse", "Other / new"],
     "origin_type": ["Human", "Enhanced Human", "Tech-Enhanced", "Mystic", "Alien", "Other / new"],
     "faction": [
-        "Independent", "CapeVerse Vanguards", "CapeVerse Originals",
+        "Independent", "CapeVerse Vanguards",
         "Justice League", "Avengers", "X-Men", "Other / new",
     ],
     "ai_assist": ["Generate with AI", "Enter moves manually"],
