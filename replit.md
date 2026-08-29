@@ -1,44 +1,61 @@
-# [Project name]
+# CapeVerse
 
-_Replace the heading above with the project's name, and this line with one sentence describing what this app does for users._
+CapeVerse is a Kurigram-powered Telegram superhero collection RPG with MongoDB persistence, clean symbol-led messaging, a generated player guide, and bot-based owner controls.
 
 ## Run & Operate
 
-- `pnpm --filter @workspace/api-server run dev` — run the API server (port 5000)
-- `pnpm run typecheck` — full typecheck across all packages
-- `pnpm run build` — typecheck + build all packages
-- `pnpm --filter @workspace/api-spec run codegen` — regenerate API hooks and Zod schemas from the OpenAPI spec
-- `pnpm --filter @workspace/db run push` — push DB schema changes (dev only)
-- Required env: `DATABASE_URL` — Postgres connection string
+- `python run.py` — run the Flask welcome endpoint and Kurigram bot
+- `python web.py` — run only the text welcome endpoint
+- `python app.py` — run only the Telegram bot
+- Required secrets: `BOT_TOKEN`, `API_ID`, `API_HASH`, `MONGODB_URI`, `OWNER_TELEGRAM_ID`
 
 ## Stack
 
-- pnpm workspaces, Node.js 24, TypeScript 5.9
-- API: Express 5
-- DB: PostgreSQL + Drizzle ORM
-- Validation: Zod (`zod/v4`), `drizzle-zod`
-- API codegen: Orval (from OpenAPI spec)
-- Build: esbuild (CJS bundle)
+- Python 3.12
+- Telegram: Kurigram + TgCrypto
+- Web: Flask, text-only public page
+- DB: MongoDB + PyMongo
+- Documents: ReportLab player guide
+- Profile cards: Pillow
 
 ## Where things live
 
-_Populate as you build — short repo map plus pointers to the source-of-truth file for DB schema, API contracts, theme files, etc._
+- `app.py` — Kurigram entry point
+- `web.py` — minimal Flask welcome endpoint
+- `database/` — MongoDB persistence, indexes, and seed content
+- `handlers/` — player and owner/moderator Telegram handlers
+- `plugins/` — battle, recruitment, missions, Arena, and Rift systems
+- `utils/` — Telegram formatting and generated profile cards
+- `guide.py` — generated PDF player guide
 
 ## Architecture decisions
 
-_Populate as you build — non-obvious choices a reader couldn't infer from the code (3-5 bullets)._
+- Administration stays inside the Telegram bot; Flask exposes only plain welcome/health text.
+- Published heroes require approved rights status.
+- Player-facing messages favor arrows, typography, and short separators over borders or heavy emoji.
+- MongoDB is the source of truth for players, content, teams, battles, permissions, and economy ledger entries.
 
 ## Product
 
-_Describe the high-level user-facing capabilities of this app once they exist._
+- Origin onboarding and starter hero grant
+- Generated guide and player profile image card
+- Three-hero teams and universe synergy
+- Recruitment Beacon with Signal Boost
+- Patrols and Case Files
+- Asynchronous Arena battles
+- Rift floors and boss encounters
+- Bot-based owner approval and per-command moderator permissions
 
 ## User preferences
 
-_Populate as you build — explicit user instructions worth remembering across sessions._
+- Keep Flask limited to a simple text welcome page.
+- Keep all owner, moderator, and game administration inside the Python Telegram bot.
+- Use mostly clean text symbols and arrows; use few emojis, especially in PvE and PvP.
 
 ## Gotchas
 
-_Populate as you build — sharp edges, "always run X before Y" rules._
+- Kurigram imports through the `pyrogram` Python namespace; do not add the upstream `Pyrogram` package to requirements.
+- Keep `MONGODB_URI` and Telegram credentials in secrets only.
 
 ## Pointers
 

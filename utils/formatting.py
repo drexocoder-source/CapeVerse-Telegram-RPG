@@ -34,17 +34,20 @@ def main_menu_markup() -> InlineKeyboardMarkup:
             ],
             [
                 InlineKeyboardButton("Recruit", callback_data="menu:recruit"),
+                InlineKeyboardButton("Relics", callback_data="menu:relics"),
+            ],
+            [
                 InlineKeyboardButton("Team", callback_data="menu:team"),
-            ],
-            [
                 InlineKeyboardButton("Missions", callback_data="menu:missions"),
-                InlineKeyboardButton("Arena", callback_data="menu:arena"),
             ],
             [
+                InlineKeyboardButton("Arena", callback_data="menu:arena"),
                 InlineKeyboardButton("The Rift", callback_data="menu:rift"),
+            ],
+            [
+                InlineKeyboardButton("Profile", callback_data="menu:profile"),
                 InlineKeyboardButton("Guide", callback_data="menu:guide"),
             ],
-            [InlineKeyboardButton("Profile", callback_data="menu:profile")],
         ]
     )
 

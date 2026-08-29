@@ -1,0 +1,16 @@
+uploads = []
+generated = []
+
+[[outputs]]
+id = "2sWj4eLRJG9IAwHo9QgHn"
+uri = "file://capeverse_player_guide.pdf"
+type = "pdf"
+title = "CapeVerse Player Guide"
+description = "The PDF automatically sent to new players after /start."
+logical_id = "a5804e56-a1d6-4b81-9fce-d2eca636cf18"
+content_hash = "sha256:f5ac05882c3dabc7d6a13d6937aa3bdcb0e35868548ee32afde9fde79530b283"
+size = 3087
+mtime_ms = 1787982840826
+storage_uri = "gcs://replit-rams-assets-pike/rams/assets/repl:4316e1df-4105-4a5b-beef-192e1033a292/a5804e56-a1d6-4b81-9fce-d2eca636cf18/c52142f0-b9c3-425b-bcdc-a4f56817cde3"
+storage_version_token = "1787983145899188"
+content_type = "application/pdf"

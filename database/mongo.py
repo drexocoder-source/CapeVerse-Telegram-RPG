@@ -60,12 +60,14 @@ def get_or_create_user(telegram_id: int, username: str = "", first_name: str = "
                 "telegram_id": telegram_id,
                 "origin": "",
                 "passive": "",
+                "alignment": "Hero",
                 "credits": 500,
                 "signal_shards": 2,
                 "prism_cores": 0,
                 "patrol_intel": 5,
                 "rating": 1000,
                 "rift_floor": 1,
+                "signal_boost": 0,
                 "guide_sent": False,
                 "created_at": now(),
             },
@@ -83,12 +85,14 @@ def update_player(telegram_id: int, **fields: Any) -> dict[str, Any] | None:
     allowed = {
         "origin",
         "passive",
+        "alignment",
         "credits",
         "signal_shards",
         "prism_cores",
         "patrol_intel",
         "rating",
         "rift_floor",
+        "signal_boost",
         "guide_sent",
     }
     clean = {key: value for key, value in fields.items() if key in allowed}
@@ -275,6 +279,44 @@ def get_stats() -> dict[str, int]:
         "battles": database.battles.count_documents({}),
         "moderators": database.moderators.count_documents({"active": True}),
     }
+
+
+def list_relics(telegram_id: int) -> list[dict[str, Any]]:
+    return list(collection("relic_instances").find({"telegram_id": telegram_id}).sort("created_at", DESCENDING))
+
+
+def grant_relic(telegram_id: int, relic: dict[str, Any]) -> dict[str, Any]:
+    payload = {
+        "telegram_id": telegram_id,
+        "name": relic["name"],
+        "slot": relic["slot"],
+        "rarity": relic["rarity"],
+        "set_name": relic["set_name"],
+        "base_stat": relic["base_stat"],
+        "substat": relic["substat"],
+        "level": 1,
+        "equipped_to": "",
+        "created_at": now(),
+    }
+    result = collection("relic_instances").insert_one(payload)
+    return {**payload, "_id": result.inserted_id}
+
+
+def publish_content(kind: str, title: str, payload: dict[str, Any]) -> None:
+    collection("content").update_one(
+        {"kind": kind, "title": title},
+        {
+            "$set": {
+                "kind": kind,
+                "title": title,
+                "payload": payload,
+                "status": "published",
+                "updated_at": now(),
+            },
+            "$setOnInsert": {"created_at": now()},
+        },
+        upsert=True,
+    )
 
 
 def seed_content() -> None:

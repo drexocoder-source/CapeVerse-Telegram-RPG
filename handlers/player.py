@@ -10,13 +10,15 @@ from database.mongo import (
     get_profile,
     get_team,
     list_owned_heroes,
+    list_relics,
     save_team,
     update_player,
 )
 from guide import ensure_guide_pdf
 from plugins.arena import start_arena
 from plugins.battle import resolve_action, start_battle
-from plugins.missions import claim_patrol
+from plugins.missions import claim_patrol, complete_case
+from plugins.relics import craft_relic
 from plugins.recruitment import pull
 from plugins.rift import start_rift
 from utils.formatting import back_markup, main_menu_markup, origin_markup, profile_text, rarity_mark
@@ -47,19 +49,20 @@ async def send_guide(message) -> None:
     )
 
 
-def _battle_markup(battle_id: str, finished: bool = False) -> InlineKeyboardMarkup:
+def _battle_markup(battle_id: str, finished: bool = False, mode: str = "") -> InlineKeyboardMarkup:
     if finished:
         return InlineKeyboardMarkup([[InlineKeyboardButton("← Main menu", callback_data="menu:home")]])
-    return InlineKeyboardMarkup(
-        [
+    rows = [
             [
                 InlineKeyboardButton("Signature →", callback_data=f"battle:{battle_id}:signature"),
                 InlineKeyboardButton("Utility →", callback_data=f"battle:{battle_id}:utility"),
             ],
             [InlineKeyboardButton("Ultimate →", callback_data=f"battle:{battle_id}:ultimate")],
-            [InlineKeyboardButton("← Main menu", callback_data="menu:home")],
-        ]
-    )
+    ]
+    if mode == "rift":
+        rows.append([InlineKeyboardButton("Nemesis Ultimate →", callback_data=f"battle:{battle_id}:nemesis")])
+    rows.append([InlineKeyboardButton("← Main menu", callback_data="menu:home")])
+    return InlineKeyboardMarkup(rows)
 
 
 def _battle_text(battle: dict, enemy_name: str) -> str:
@@ -197,13 +200,37 @@ async def callback_handler(client, callback_query):
             text = f"<b>Team 1</b>\n\n{members}\n\nThree slots → roles → synergy"
         await callback_query.message.edit_text(text, parse_mode="html", reply_markup=back_markup())
         return
+    if data == "menu:relics":
+        relics = list_relics(user_id)
+        rows = "\n".join(
+            f"◆ <b>{relic['name']}</b>  ·  {relic['slot']}\n"
+            f"   {relic['base_stat']}  →  {relic['substat']}"
+            for relic in relics[:10]
+        ) or "No relics owned yet."
+        await callback_query.message.edit_text(
+            f"<b>Relics</b>\n\n{rows}\n\nForge cost → 100 Cape Credits",
+            parse_mode="html",
+            reply_markup=InlineKeyboardMarkup(
+                [[InlineKeyboardButton("Forge one relic →", callback_data="relic:craft")], [InlineKeyboardButton("← Back", callback_data="menu:home")]]
+            ),
+        )
+        return
+    if data == "relic:craft":
+        result = craft_relic(user_id)
+        if result["ok"]:
+            relic = result["relic"]
+            text = f"<b>Relic forged</b>\n\n◆ {relic['name']}\n{relic['slot']}  →  {relic['base_stat']}\nSubstat → {relic['substat']}\n\nCape Credits → {result['balance']}"
+        else:
+            text = f"<b>Forge unavailable</b>\n\n{result['reason']}"
+        await callback_query.message.edit_text(text, parse_mode="html", reply_markup=back_markup())
+        return
     if data == "menu:recruit":
         profile = get_profile(user_id) or {}
         await callback_query.message.edit_text(
             "<b>Recruitment Beacon</b>\n\n"
             f"Signal Shards → <b>{profile.get('signal_shards', 0)}</b>\n"
             "One pull → 1 Signal Shard\n"
-            "Signal Boost → visible in the Beacon log\n\n"
+            f"Signal Boost → <b>{profile.get('signal_boost', 0)}%</b>\n\n"
             "Choose your pull →",
             parse_mode="html",
             reply_markup=InlineKeyboardMarkup(
@@ -222,7 +249,8 @@ async def callback_handler(client, callback_query):
                 f"{rarity_mark(hero.get('rarity', 'Common'))} <b>{hero['name']}</b>\n"
                 f"{hero['role']}  →  {hero['universe']}\n\n"
                 f"{hero['description']}\n\n"
-                f"Signal Shards remaining → {result['balance']}"
+                f"Signal Shards remaining → {result['balance']}\n"
+                f"Signal Boost → {result['signal_boost']}%"
             )
         await callback_query.message.edit_text(text, parse_mode="html", reply_markup=back_markup())
         return
@@ -234,9 +262,12 @@ async def callback_handler(client, callback_query):
             "Case Files → follow branching story paths\n\n"
             f"Patrol Intel → <b>{profile.get('patrol_intel', 0)}</b>",
             parse_mode="html",
-            reply_markup=InlineKeyboardMarkup(
-                [[InlineKeyboardButton("Claim Patrol →", callback_data="mission:patrol")], [InlineKeyboardButton("Case File 01 →", callback_data="menu:battle")], [InlineKeyboardButton("← Back", callback_data="menu:home")]]
-            ),
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("Claim Patrol →", callback_data="mission:patrol")],
+                [InlineKeyboardButton("Protect civilians →", callback_data="mission:case:Hero")],
+                [InlineKeyboardButton("Pursue the threat →", callback_data="mission:case:Vigilante")],
+                [InlineKeyboardButton("← Back", callback_data="menu:home")],
+            ]),
         )
         return
     if data == "mission:patrol":
@@ -244,22 +275,32 @@ async def callback_handler(client, callback_query):
         text = f"<b>Patrol complete</b>\n\n+ {result.get('credits', 0)} Cape Credits\n→ The city keeps moving." if result["ok"] else f"<b>Patrol unavailable</b>\n\n{result['reason']}"
         await callback_query.message.edit_text(text, parse_mode="html", reply_markup=back_markup())
         return
+    if data.startswith("mission:case:"):
+        alignment = data.split(":", 2)[2]
+        result = complete_case(user_id, alignment)
+        text = (
+            f"<b>Case File resolved</b>\n\nChoice → {result['alignment']}\nReward → +{result['credits']} Cape Credits\nAlignment updated →"
+            if result["ok"]
+            else f"<b>Case File unavailable</b>\n\n{result['reason']}"
+        )
+        await callback_query.message.edit_text(text, parse_mode="html", reply_markup=back_markup())
+        return
     if data == "menu:battle":
         battle_info = start_battle(user_id, "tutorial", "Case File 01 · Broken Signal")
         battle = {"stage": "Case File 01 · Broken Signal", "enemy_hp": battle_info["enemy_hp"], "player_hp": 100, "turn": 1}
-        await callback_query.message.edit_text(_battle_text(battle, battle_info["enemy_name"]), parse_mode="html", reply_markup=_battle_markup(battle_info["id"]))
+        await callback_query.message.edit_text(_battle_text(battle, battle_info["enemy_name"]), parse_mode="html", reply_markup=_battle_markup(battle_info["id"], mode="tutorial"))
         return
     if data == "menu:arena":
         battle_info = start_arena(user_id)
         battle = {"stage": "Sanctioned Bout", "enemy_hp": battle_info["enemy_hp"], "player_hp": 100, "turn": 1}
-        await callback_query.message.edit_text(_battle_text(battle, battle_info["enemy_name"]), parse_mode="html", reply_markup=_battle_markup(battle_info["id"]))
+        await callback_query.message.edit_text(_battle_text(battle, battle_info["enemy_name"]), parse_mode="html", reply_markup=_battle_markup(battle_info["id"], mode="arena"))
         return
     if data == "menu:rift":
         profile = get_profile(user_id) or {}
         floor = int(profile.get("rift_floor", 1))
         battle_info = start_rift(user_id, floor)
         battle = {"stage": f"The Rift · Floor {floor}", "enemy_hp": battle_info["enemy_hp"], "player_hp": 100, "turn": 1}
-        await callback_query.message.edit_text(_battle_text(battle, battle_info["enemy_name"]), parse_mode="html", reply_markup=_battle_markup(battle_info["id"]))
+        await callback_query.message.edit_text(_battle_text(battle, battle_info["enemy_name"]), parse_mode="html", reply_markup=_battle_markup(battle_info["id"], mode="rift"))
         return
     if data.startswith("battle:"):
         _, battle_id, action = data.split(":", 2)
@@ -270,7 +311,7 @@ async def callback_handler(client, callback_query):
         enemy_name = "The Null Regent" if battle["mode"] == "rift" else "Rival Captain" if battle["mode"] == "arena" else "Null Hound"
         finished = battle["status"] != "active"
         result_line = "\n\n<b>Victory → reward pending</b>" if battle["status"] == "won" else "\n\n<b>Defeat → regroup and try again</b>" if battle["status"] == "lost" else ""
-        await callback_query.message.edit_text(_battle_text(battle, enemy_name) + result_line, parse_mode="html", reply_markup=_battle_markup(battle_id, finished))
+        await callback_query.message.edit_text(_battle_text(battle, enemy_name) + result_line, parse_mode="html", reply_markup=_battle_markup(battle_id, finished, battle["mode"]))
 
 
 def register(client) -> None:

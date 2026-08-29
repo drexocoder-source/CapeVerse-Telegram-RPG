@@ -11,6 +11,7 @@ from database.mongo import (
     get_hero,
     list_moderators,
     list_submissions,
+    publish_content,
     review_submission,
     seed_hero,
     upsert_moderator,
@@ -165,8 +166,8 @@ async def submitkind_command(client, message):
     user_id = message.from_user.id
     if not can(user_id, "submit_content"):
         return
-    raw = (message.text or "").split(maxsplit=2)
-    if len(raw) < 3:
+    raw = (message.text or "").split(maxsplit=1)
+    if len(raw) < 2:
         await message.reply_text(
             "<b>New content kind</b>\n\n"
             "/submitkind KIND | TITLE | DEFINITION\n\n"
@@ -174,12 +175,13 @@ async def submitkind_command(client, message):
             parse_mode="html",
         )
         return
-    parts = [part.strip() for part in raw[1].split("|", 1)]
-    title_and_definition = raw[2].split("|", 1)
-    title = parts[0]
-    definition = title_and_definition[-1].strip() if title_and_definition else ""
-    add_submission(parts[0], title, {"details": definition}, str(user_id))
-    await message.reply_text(f"<b>Content queued → {parts[0]}</b>\n\n{title}\nOwner review is required.", parse_mode="html")
+    parts = [part.strip() for part in raw[1].split("|", 2)]
+    if len(parts) != 3:
+        await message.reply_text("<b>Submission not saved</b>\n\nUse KIND | TITLE | DEFINITION after /submitkind.", parse_mode="html")
+        return
+    kind, title, definition = parts
+    add_submission(kind, title, {"details": definition}, str(user_id))
+    await message.reply_text(f"<b>Content queued → {kind}</b>\n\n{title}\nOwner review is required.", parse_mode="html")
 
 
 async def adminhelp_command(client, message):
@@ -272,6 +274,8 @@ async def admin_callback(client, callback_query):
                 )
                 return
             seed_hero({**payload, "status": "published"})
+        elif action[1] == "approve" and item:
+            publish_content(item.get("content_kind", "content"), item.get("title", "Untitled"), item.get("payload", {}))
         review_submission(submission_id, "approved" if action[1] == "approve" else "rejected", str(callback_query.from_user.id))
         await callback_query.message.edit_text(f"<b>Submission {action[1]}d</b>\n\nReview recorded.", parse_mode="html", reply_markup=owner_panel_markup())
     elif action[1] == "hero_guide":

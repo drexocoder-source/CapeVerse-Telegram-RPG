@@ -1,7 +1,7 @@
 import random
 from typing import Any
 
-from database.mongo import create_battle, get_battle, update_battle
+from database.mongo import create_battle, get_battle, get_profile, record_ledger, update_battle, update_player
 
 
 ENEMIES = {
@@ -24,6 +24,8 @@ def resolve_action(telegram_id: int, battle_id: str, action: str) -> dict[str, A
         return None
 
     action_damage = {"signature": 24, "utility": 15, "ultimate": 38}.get(action, 12)
+    if action == "nemesis" and battle["mode"] == "rift":
+        action_damage = 52
     enemy_damage = random.randint(7, 16)
     new_enemy_hp = max(0, int(battle["enemy_hp"]) - action_damage)
     new_player_hp = max(0, int(battle["player_hp"]) - (0 if action == "utility" else enemy_damage))
@@ -33,6 +35,16 @@ def resolve_action(telegram_id: int, battle_id: str, action: str) -> dict[str, A
     if new_enemy_hp == 0:
         status = "won"
         log.append("Victory → threat cleared")
+        profile = get_profile(telegram_id) or {}
+        reward = 150 if battle["mode"] == "rift" else 100 if battle["mode"] == "arena" else 75
+        updates = {"credits": int(profile.get("credits", 0)) + reward}
+        if battle["mode"] == "arena":
+            updates["rating"] = int(profile.get("rating", 1000)) + 10
+        if battle["mode"] == "rift":
+            updates["rift_floor"] = int(profile.get("rift_floor", 1)) + 1
+        update_player(telegram_id, **updates)
+        record_ledger(telegram_id, "credits", reward, f"{battle['mode']} battle victory", updates["credits"])
+        log.append(f"Reward → +{reward} Cape Credits")
     elif new_player_hp == 0:
         status = "lost"
         log.append("Defeat → regroup and try again")
